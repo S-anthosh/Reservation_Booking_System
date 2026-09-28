@@ -1,0 +1,8 @@
+{
+  "name": "DineFlow Premium Reservations",
+  "description": "A high-end restaurant booking platform featuring real-time availability, seamless Supabase integration, and a professional-grade secure admin dashboard.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
