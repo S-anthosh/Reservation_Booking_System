@@ -8,7 +8,7 @@ A reservation system for booking rooms, built as a team engineering project for 
 |--------|--------|
 | Member 1 | [@S-anthosh](https://github.com/S-anthosh) |
 | Member 2 | [@Shrivethan](https://github.com/Shrivethan) |
-| Member 3 | [@your-username](https://github.com/your-username) <!-- TODO: replace --> |
+| Member 3 | [@arunAK096](https://github.com/arunAK096)  |
 
 Repository: https://github.com/S-anthosh/Reservation_Booking_System
 
