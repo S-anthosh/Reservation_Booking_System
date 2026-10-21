@@ -63,13 +63,15 @@ POST /reservations
 
 ---
 
-## Status
+## Project Status
 
 | Cycle | Deliverable | Status |
-|-------|-------------|--------|
-| **C01** | Repo structure, Project Frame, future pressure, persistence spike (save + reload a `Reservation` with SQLAlchemy + SQLite) | **Done** |
-| **C02** | Behavior spec for the four core operations, running app matching the spec, approval-workflow change (Baseline v0.1 → v0.2), double-booking prevention, 5-guest limit | **Done** |
-| **C03** | CP1 walking skeleton (validation, availability check, `POST /reservations`, automated DB check) | **In progress** |
+|---|---|---|
+| **C01** | Repository setup, Project Frame, and persistence spike using SQLAlchemy + SQLite | **Done** |
+| **C02** | Behaviour specification, reservation workflow, double-booking prevention requirements, and maximum 5-guest rule | **Done** |
+| **C03** | CP1 walking skeleton, request validation, availability checking, reservation API, database persistence, and automated verification | **Done** |
+| **C05** | Detailed Design, responsibilities, ownership, interfaces and contracts, UML diagrams, reservation-confirmation algorithm, DD-derived tests, and implementation verification | **Done** |
+
 
 ---
 
