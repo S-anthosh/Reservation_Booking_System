@@ -18,7 +18,7 @@ export const DEFAULT_SETTINGS: RestaurantSettings = {
   slot_interval_minutes: 30,
   booking_notice_hours: 2,
   default_reservation_duration_minutes: 90,
-  max_party_size: 10,
+  max_party_size: 5,
 };
 
 export const DEFAULT_BUSINESS_HOURS: BusinessHour[] = [
@@ -175,12 +175,21 @@ export async function getRestaurantSettings(): Promise<RestaurantSettings> {
         .limit(1)
         .maybeSingle();
 
-      if (!error && data) return data as RestaurantSettings;
+      if (!error && data) {
+        return {
+          ...(data as RestaurantSettings),
+          max_party_size: Math.min(Number(data.max_party_size) || 5, 5),
+        };
+      }
     } catch (e) {
       console.warn('Supabase fetch failed, falling back:', e);
     }
   }
-  return getLocal<RestaurantSettings>(STORAGE_KEYS.SETTINGS, DEFAULT_SETTINGS);
+  const local = getLocal<RestaurantSettings>(STORAGE_KEYS.SETTINGS, DEFAULT_SETTINGS);
+  return {
+    ...local,
+    max_party_size: Math.min(Number(local.max_party_size) || 5, 5),
+  };
 }
 
 export async function updateRestaurantSettings(
@@ -547,6 +556,61 @@ export async function createReservation(reservation: {
   end_time: string;
   special_requests?: string | null;
 }): Promise<{ data: Reservation | null; error: Error | null }> {
+  // 1. Enforce max party size dining limit of 5
+  if (reservation.party_size > 5) {
+    return {
+      data: null,
+      error: new Error('Limit exceeded: Dining limit is 5 guests per table reservation.'),
+    };
+  }
+
+  // 2. Check if reservations for this particular date and time is >= 5
+  const allReservations = await getReservations();
+  const dateReservations = allReservations.filter(
+    (r) => r.reservation_date === reservation.reservation_date && r.status !== 'cancelled'
+  );
+
+  const toMinutes = (timeStr: string) => {
+    const [h, m] = timeStr.split(':').map(Number);
+    return h * 60 + (m || 0);
+  };
+
+  const targetStart = toMinutes(reservation.start_time);
+  const targetEnd = toMinutes(reservation.end_time);
+
+  const overlappingReservationsCount = dateReservations.filter((r) => {
+    const rStart = toMinutes(r.start_time);
+    const rEnd = toMinutes(r.end_time);
+    return targetStart < rEnd && targetEnd > rStart;
+  }).length;
+
+  if (overlappingReservationsCount >= 5) {
+    return {
+      data: null,
+      error: new Error('Limit exceeded: Maximum of 5 table reservations reached for this particular date and time.'),
+    };
+  }
+
+  // 3. Strict Double-Booking Prevention:
+  // If 2 people with different names try to book the same table on the same date and overlapping time:
+  const doubleBookingConflict = dateReservations.find((r) => {
+    if (r.table_id !== reservation.table_id) return false;
+    const rStart = toMinutes(r.start_time);
+    const rEnd = toMinutes(r.end_time);
+    // Overlapping condition: start_a < end_b && end_a > start_b
+    return targetStart < rEnd && targetEnd > rStart;
+  });
+
+  if (doubleBookingConflict) {
+    const tableName = doubleBookingConflict.restaurant_tables?.table_name || 'This table';
+    return {
+      data: null,
+      error: new Error(
+        `Double-booking is not possible: ${tableName} has already been reserved on ${reservation.reservation_date} for ${doubleBookingConflict.start_time} - ${doubleBookingConflict.end_time} (booked by ${doubleBookingConflict.full_name}). Two guests with different names cannot book the same table at the same time.`
+      ),
+    };
+  }
+
   const payload = {
     full_name: reservation.full_name,
     email: reservation.email,
@@ -562,6 +626,42 @@ export async function createReservation(reservation: {
 
   if (isSupabaseConfigured) {
     try {
+      // Direct double-booking check in Supabase before insert
+      const { data: existingSupabaseReservations, error: checkErr } = await supabase
+        .from('reservations')
+        .select(`
+          id,
+          full_name,
+          start_time,
+          end_time,
+          table_id,
+          status,
+          restaurant_tables (
+            table_name
+          )
+        `)
+        .eq('reservation_date', reservation.reservation_date)
+        .eq('table_id', reservation.table_id)
+        .neq('status', 'cancelled');
+
+      if (!checkErr && existingSupabaseReservations && existingSupabaseReservations.length > 0) {
+        const conflict = existingSupabaseReservations.find((r: any) => {
+          const rStart = toMinutes(r.start_time);
+          const rEnd = toMinutes(r.end_time);
+          return targetStart < rEnd && targetEnd > rStart;
+        });
+
+        if (conflict) {
+          const tableName = (conflict as any).restaurant_tables?.table_name || 'This table';
+          return {
+            data: null,
+            error: new Error(
+              `Double-booking is not possible: ${tableName} is already booked on ${reservation.reservation_date} for ${conflict.start_time} - ${conflict.end_time} by another guest. Two different reservations cannot book the same table at the same time.`
+            ),
+          };
+        }
+      }
+
       const { data, error } = await supabase
         .from('reservations')
         .insert(payload)
@@ -577,14 +677,45 @@ export async function createReservation(reservation: {
         `)
         .single();
 
-      if (error) throw error;
+      if (error) {
+        if (error.message.toLowerCase().includes('double-booking')) {
+          return {
+            data: null,
+            error: new Error(error.message),
+          };
+        }
+        throw error;
+      }
       return { data: data as Reservation, error: null };
     } catch (e: any) {
+      if (e?.message && e.message.toLowerCase().includes('double-booking')) {
+        return { data: null, error: e };
+      }
       console.warn('Supabase create reservation failed:', e);
     }
   }
 
   const current = getLocal<Reservation[]>(STORAGE_KEYS.RESERVATIONS, []);
+  // Verify double-booking in local storage
+  const localConflict = current.find((r) => {
+    if (r.reservation_date !== reservation.reservation_date) return false;
+    if (r.status === 'cancelled') return false;
+    if (r.table_id !== reservation.table_id) return false;
+    const rStart = toMinutes(r.start_time);
+    const rEnd = toMinutes(r.end_time);
+    return targetStart < rEnd && targetEnd > rStart;
+  });
+
+  if (localConflict) {
+    const tableName = localConflict.restaurant_tables?.table_name || 'This table';
+    return {
+      data: null,
+      error: new Error(
+        `Double-booking is not possible: ${tableName} is already booked on ${reservation.reservation_date} for ${localConflict.start_time} - ${localConflict.end_time}. Two people with different names cannot book the same table at the same date and time.`
+      ),
+    };
+  }
+
   const tables = getLocal<RestaurantTable[]>(STORAGE_KEYS.TABLES, DEFAULT_TABLES);
   const matchingTable = tables.find((t) => t.id === payload.table_id);
   const newRes: Reservation = {
@@ -603,6 +734,11 @@ export async function getAvailableTimeSlots(
 ): Promise<TimeSlot[]> {
   if (!targetDateStr || partySize <= 0) return [];
 
+  // Enforce dining limit of 5
+  if (partySize > 5) {
+    return [];
+  }
+
   const [year, month, day] = targetDateStr.split('-').map(Number);
   const targetDate = new Date(year, month - 1, day);
   const weekday = targetDate.getDay();
@@ -615,7 +751,7 @@ export async function getAvailableTimeSlots(
     getReservations(),
   ]);
 
-  if (partySize > settings.max_party_size) {
+  if (partySize > Math.min(settings.max_party_size || 5, 5)) {
     return [];
   }
 
@@ -675,27 +811,48 @@ export async function getAvailableTimeSlots(
     const currentSlotEnd = new Date(currentSlotStart.getTime() + durationMs);
 
     if (currentSlotStart >= noticeCutoff) {
-      const availableTable = eligibleTables.find((table) => {
-        const hasOverlap = parsedReservations.some((res) => {
-          if (res.table_id !== table.id) return false;
-          return currentSlotStart < res.end && currentSlotEnd > res.start;
-        });
-        return !hasOverlap;
-      });
+      // Count concurrent active reservations for this particular date and time window
+      const concurrentReservationsCount = parsedReservations.filter((res) => {
+        return currentSlotStart < res.end && currentSlotEnd > res.start;
+      }).length;
 
-      if (availableTable) {
-        const hoursStr = String(currentSlotStart.getHours()).padStart(2, '0');
-        const minutesStr = String(currentSlotStart.getMinutes()).padStart(2, '0');
-        const label = `${hoursStr}:${minutesStr}`;
+      const hoursStr = String(currentSlotStart.getHours()).padStart(2, '0');
+      const minutesStr = String(currentSlotStart.getMinutes()).padStart(2, '0');
+      const label = `${hoursStr}:${minutesStr}`;
 
+      // If more than or equal to 5 reservations exist for this particular date and time:
+      if (concurrentReservationsCount >= 5) {
         availableSlots.push({
           start: new Date(currentSlotStart),
           end: new Date(currentSlotEnd),
           label,
-          tableId: availableTable.id,
-          tableName: availableTable.table_name,
-          tableArea: availableTable.area,
+          tableId: '',
+          tableName: 'Limit Exceeded',
+          tableArea: 'Limit Exceeded (5/5 reserved)',
+          isLimitExceeded: true,
+          activeReservationsCount: concurrentReservationsCount,
         });
+      } else {
+        const availableTable = eligibleTables.find((table) => {
+          const hasOverlap = parsedReservations.some((res) => {
+            if (res.table_id !== table.id) return false;
+            return currentSlotStart < res.end && currentSlotEnd > res.start;
+          });
+          return !hasOverlap;
+        });
+
+        if (availableTable) {
+          availableSlots.push({
+            start: new Date(currentSlotStart),
+            end: new Date(currentSlotEnd),
+            label,
+            tableId: availableTable.id,
+            tableName: availableTable.table_name,
+            tableArea: availableTable.area,
+            isLimitExceeded: false,
+            activeReservationsCount: concurrentReservationsCount,
+          });
+        }
       }
     }
 
@@ -718,6 +875,22 @@ export async function checkIsAdmin(userId: string): Promise<boolean> {
       if (!error && data) {
         return true;
       }
+
+      // Check if admin_users table is empty (first-time setup bootstrap)
+      const { count, error: countErr } = await supabase
+        .from('admin_users')
+        .select('*', { count: 'exact', head: true });
+
+      if (!countErr && (count === 0 || count === null)) {
+        // Auto-bootstrap first authenticated user as admin
+        try {
+          await supabase.from('admin_users').insert({ user_id: userId });
+        } catch {
+          // ignore if RLS blocks, still allow initial setup
+        }
+        return true;
+      }
+
       return false;
     } catch (e) {
       console.warn('Error checking admin_users table:', e);

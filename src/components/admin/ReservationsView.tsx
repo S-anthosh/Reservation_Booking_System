@@ -5,6 +5,7 @@ import {
   Plus,
   Users,
   X,
+  AlertCircle,
 } from 'lucide-react';
 import { Reservation, RestaurantTable } from '../../types/database';
 
@@ -12,7 +13,7 @@ interface ReservationsViewProps {
   reservations: Reservation[];
   tables: RestaurantTable[];
   onUpdateStatus: (id: string, status: Reservation['status']) => void;
-  onCreateReservation: (reservation: any) => Promise<boolean>;
+  onCreateReservation: (reservation: any) => Promise<{ success: boolean; error?: string } | boolean>;
 }
 
 export const ReservationsView: React.FC<ReservationsViewProps> = ({
@@ -36,6 +37,7 @@ export const ReservationsView: React.FC<ReservationsViewProps> = ({
   const [newEndTime, setNewEndTime] = useState('19:30');
   const [newSpecialRequests, setNewSpecialRequests] = useState('');
   const [modalSubmitting, setModalSubmitting] = useState(false);
+  const [modalError, setModalError] = useState<string | null>(null);
 
   const [activeDetail, setActiveDetail] = useState<Reservation | null>(null);
 
@@ -60,9 +62,14 @@ export const ReservationsView: React.FC<ReservationsViewProps> = ({
 
   const handleCreateSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (Number(newPartySize) > 5) {
+      setModalError('Limit exceeded: The dining limit is 5 guests per reservation.');
+      return;
+    }
     setModalSubmitting(true);
+    setModalError(null);
     try {
-      const ok = await onCreateReservation({
+      const result = await onCreateReservation({
         full_name: newFullName.trim(),
         email: newEmail.trim(),
         phone: newPhone.trim(),
@@ -73,13 +80,24 @@ export const ReservationsView: React.FC<ReservationsViewProps> = ({
         end_time: newEndTime,
         special_requests: newSpecialRequests.trim() || null,
       });
-      if (ok) {
+
+      const isSuccess = typeof result === 'boolean' ? result : result.success;
+      if (isSuccess) {
         setShowNewModal(false);
         setNewFullName('');
         setNewEmail('');
         setNewPhone('');
         setNewSpecialRequests('');
+        setModalError(null);
+      } else {
+        const errorText =
+          typeof result === 'object' && result.error
+            ? result.error
+            : 'Double-booking is not possible: This table is already booked for this date and time.';
+        setModalError(errorText);
       }
+    } catch (err: any) {
+      setModalError(err?.message || 'Double-booking is not possible: Table already booked.');
     } finally {
       setModalSubmitting(false);
     }
@@ -417,6 +435,13 @@ export const ReservationsView: React.FC<ReservationsViewProps> = ({
               </button>
             </div>
 
+            {modalError && (
+              <div className="p-3 rounded bg-[#251518] border border-[#5c2429] text-xs text-[#fca5a5] flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 text-[#ef4444] shrink-0" />
+                <span className="font-semibold">{modalError}</span>
+              </div>
+            )}
+
             <form onSubmit={handleCreateSubmit} className="space-y-4 text-xs">
               <div className="grid grid-cols-2 gap-3">
                 <div className="col-span-2">
@@ -463,15 +488,23 @@ export const ReservationsView: React.FC<ReservationsViewProps> = ({
 
                 <div>
                   <label className="block text-[#9ca3af] uppercase text-[10px] font-semibold mb-1">
-                    Party Size *
+                    Party Size (Dining Limit: Max 5) *
                   </label>
                   <input
                     type="number"
                     min={1}
-                    max={20}
+                    max={5}
                     required
                     value={newPartySize}
-                    onChange={(e) => setNewPartySize(Number(e.target.value))}
+                    onChange={(e) => {
+                      const val = Number(e.target.value);
+                      if (val > 5) {
+                        setModalError('Limit exceeded: Dining limit is maximum 5 guests.');
+                      } else {
+                        setModalError(null);
+                      }
+                      setNewPartySize(val);
+                    }}
                     className="w-full bg-[#161822] border border-[#262a38] rounded p-2 text-white"
                   />
                 </div>

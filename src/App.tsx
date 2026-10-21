@@ -237,13 +237,16 @@ export default function App() {
     }
   };
 
-  const handleCreateReservationManual = async (resData: any): Promise<boolean> => {
+  const handleCreateReservationManual = async (resData: any): Promise<{ success: boolean; error?: string }> => {
     const { data, error } = await createReservation(resData);
     if (!error && data) {
       setReservations((prev) => [data, ...prev]);
-      return true;
+      return { success: true };
     }
-    return false;
+    return {
+      success: false,
+      error: error?.message || 'Double-booking is not possible: This table is already booked.',
+    };
   };
 
   const handleLogout = async () => {

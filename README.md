@@ -1,6 +1,6 @@
 # Room Booking Reservation System
 
-A reservation system for booking rooms, built as a team engineering project for the SWI course. Its central design goal is to **make double-booking of a critical room impossible**.
+A reservation system for booking rooms and dining tables, built as a team engineering project for the SWI course. Its central design goal is to **make double-booking of a critical room or table impossible**.
 
 ## Team
 
@@ -11,74 +11,154 @@ A reservation system for booking rooms, built as a team engineering project for 
 | Member 3 | [@arunAK096](https://github.com/arunAK096)  |
 >>>>>>> 07f3cbf154879f5e514147719495aeb43bf83cbc
 
-Repository: https://github.com/S-anthosh/Reservation_Booking_System
+- **Repository:** [https://github.com/S-anthosh/Reservation_Booking_System](https://github.com/S-anthosh/Reservation_Booking_System)
+- **Commit Reference:** `07f3cbf154879f5e514147719495aeb43bf83cbc`
+
+---
 
 ## Project Frame
 
-- **Reserved resource:** rooms
-- **Users:** people who need to reserve a room for a time window
-- **Future pressure (Risk):** two users reserving the same critical room for overlapping times. Every design decision is checked against this risk.
-- **Stack:** Python, SQLAlchemy, SQLite
+- **Reserved resource:** Rooms & Dining Tables
+- **Users:** People who need to reserve a room or table for a specific time window
+- **Future pressure (Risk):** Two users with different (or identical) names reserving the same critical room or table for overlapping times. Every design and architectural decision is checked against this risk.
+- **Stack:**
+  - **Frontend / Client Application:** React 19, TypeScript, Vite, Tailwind CSS, Lucide Icons, Motion
+  - **Backend & Database Integrations:** Supabase (PostgreSQL with RLS & double-booking prevention trigger) & Offline LocalStorage Fallback
+  - **Course Backend Spike:** Python, SQLAlchemy, SQLite, Pytest
 
-## Core Behavior
+---
+
+## Core Behavior & Business Invariants
 
 | Operation | Description |
 |-----------|-------------|
-| Create Reservation | Validate `room_id`, `user_id`, `start_time`, `end_time`; persist a new reservation in state `DRAFT` |
-| Check Availability | Report whether a room has an overlapping `CONFIRMED` reservation in a given time window |
-| Confirm Reservation | Move a `DRAFT` reservation to `CONFIRMED`, re-checking availability at that moment |
-| Cancel Reservation | Move a reservation to `CANCELLED`, freeing the room |
+| **Create Reservation** | Validates `room_id` / `table_id`, `party_size` (max 5), `start_time`, `end_time`; persists a new reservation in state `DRAFT` / `pending`. |
+| **Check Availability** | Reports whether a room/table has an overlapping active reservation (`CONFIRMED` / `pending`) in a given time window. |
+| **Confirm Reservation** | Moves a `DRAFT` reservation to `CONFIRMED`, re-checking availability at that exact moment to eliminate race conditions. |
+| **Cancel Reservation** | Moves a reservation to `CANCELLED`, immediately freeing the room/table for other bookings. |
 
-A reservation's time window must have `start_time < end_time`. Two reservations overlap when `start_a < end_b` and `end_a > start_b`; only `CONFIRMED` reservations block a room.
+### Invariants:
+1. **Double-Booking Prevention:** A reservation's time window must have `start_time < end_time`. Two reservations overlap when:
+   $$\text{start}_A < \text{end}_B \quad\text{and}\quad \text{end}_A > \text{start}_B$$
+   If two people with different names attempt to book the same room/table at overlapping times, the system rejects the booking with:  
+   `"Double-booking is not possible: This table is already booked for this date and time."`
+2. **Dining Limit:** Maximum of **5 guests** per reservation. Any party size greater than 5 is rejected with `"Limit exceeded"`.
+3. **Slot Limit:** Maximum of **5 table reservations** allowed for any specific date and time slot. If a slot reaches 5 reservations, the system marks the slot as `"Limit Exceeded"`.
+
+---
 
 ## CP1 Walking Skeleton
 
-The one end-to-end path that must be fully runnable after C03 and before C04:
+The end-to-end path that is fully runnable:
 
 ```
 POST /reservations
-  → validate request (room_id, user_id, start_time, end_time)
-  → check room availability (no overlapping CONFIRMED reservation)
-  → persist reservation to database (state = DRAFT)
-  → return reservation ID to the caller
+  → validate request (room_id / table_id, party_size <= 5, start_time, end_time)
+  → check room availability (no overlapping active reservation: start_a < end_b && end_a > start_b)
+  → check slot capacity (total concurrent reservations for this date/time < 5)
+  → persist reservation to database (state = DRAFT / pending)
+  → return reservation ID & confirmation to the caller
   → automated check confirms the reservation exists in the database
 ```
+
+---
 
 ## Status
 
 | Cycle | Deliverable | Status |
 |-------|-------------|--------|
-| C01 | Repo structure, Project Frame, future pressure, persistence spike (save + reload a `Reservation` with SQLAlchemy + SQLite) | Done |
-| C02 | Behavior spec for the four core operations, running app matching the spec, approval-workflow change (Baseline v0.1 → v0.2) | In progress |
-| C03 | CP1 walking skeleton (validation, availability check, `POST /reservations`, automated DB check) | Not started |
+| **C01** | Repo structure, Project Frame, future pressure, persistence spike (save + reload a `Reservation` with SQLAlchemy + SQLite) | **Done** |
+| **C02** | Behavior spec for the four core operations, running app matching the spec, approval-workflow change (Baseline v0.1 → v0.2), double-booking prevention, 5-guest limit | **Done** |
+| **C03** | CP1 walking skeleton (validation, availability check, `POST /reservations`, automated DB check) | **In progress** |
 
-## Getting Started
+---
 
-<!-- TODO: fill in once the code is on the main branch. Keep it copy-paste runnable. -->
+## How to Run This Project
+
+### 1. Prerequisites
+- **Node.js** (v18 or higher, recommended v20+)
+- **npm** (v9 or higher)
+- *(Optional for Python tests)*: **Python 3.10+**
+
+---
+
+### 2. Running the Interactive Web Application (Vite + React)
+
+Clone the repository and install dependencies:
 
 ```bash
+# Clone the repository
 git clone https://github.com/S-anthosh/Reservation_Booking_System.git
 cd Reservation_Booking_System
 
-python -m venv .venv
-source .venv/bin/activate        # Windows: .venv\Scripts\activate
-pip install -r requirements.txt  # TODO: add requirements.txt
-
-# TODO: command to run the app
-# TODO: command to run the tests (e.g. pytest)
+# Install packages
+npm install --legacy-peer-deps
 ```
+
+Start the development server:
+
+```bash
+npm run dev
+```
+
+Open your browser at:
+👉 **`http://localhost:3000`**
+
+#### Key Features in the Web App:
+- **Public Booking Flow:** Interactive 4-step reservation wizard (Party size 1-5, Evening & Seating time selection, Guest details, Calendar download).
+- **Double-Booking Prevention:** Real-time table conflict validation with instant slot re-checking and user guidance.
+- **Admin Management Portal:** Access via the navigation bar (`http://localhost:3000` &rarr; click **"Staff Login"**):
+  - Click **"Instant Preview Mode (Bypass Supabase Login)"** for instant access without setting up cloud accounts.
+  - Or connect your own Supabase project using `.env` (see `.env.example`).
+  - Manage real-time reservations, floor plan tables, menu items, business hours, blocked holiday dates, and restaurant settings.
+
+---
+
+### 3. Optional: Running Python Spike & Unit Tests
+
+If running the Python persistence spike and test suite:
+
+```bash
+# Create virtual environment
+python -m venv .venv
+
+# Activate virtual environment
+# Windows (PowerShell):
+.venv\Scripts\Activate.ps1
+# macOS / Linux:
+source .venv/bin/activate
+
+# Install requirements (if requirements.txt is present)
+pip install -r requirements.txt
+
+# Run automated tests
+pytest
+```
+
+---
 
 ## Repository Structure
 
-<!-- TODO: replace with the real layout once it exists -->
-
 ```
 .
-├── src/        # application code
-├── tests/      # automated tests
-├── docs/       # project frame, behavior spec, evidence, baselines
-└── README.md
+├── src/
+│   ├── components/
+│   │   ├── admin/           # Admin portal (Reservations, Tables, Menu, Hours, Settings, Login)
+│   │   └── public/          # Public guest interface (Hero, Menu, ReservationSection, Story)
+│   ├── lib/
+│   │   ├── data-service.ts  # Reservation business logic, double-booking validation, capacity checks
+│   │   └── supabase.ts      # Supabase client & environment configuration
+│   ├── types/
+│   │   └── database.ts      # TypeScript interfaces for reservations, tables, settings, slots
+│   ├── App.tsx              # Main application root
+│   └── main.tsx             # Entry point
+├── supabase-schema.sql      # PostgreSQL schema with double-booking prevention trigger & RLS
+├── .env.example             # Example environment variables (no secrets)
+├── package.json             # NPM package dependencies and scripts
+└── README.md                # Project documentation
 ```
+
+---
 
 ## Contributing
 

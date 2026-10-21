@@ -78,4 +78,6 @@ export interface TimeSlot {
   tableId: string;
   tableName?: string;
   tableArea?: string;
+  isLimitExceeded?: boolean;
+  activeReservationsCount?: number;
 }

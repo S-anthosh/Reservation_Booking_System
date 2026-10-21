@@ -237,19 +237,19 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
             <div className="p-4 rounded-lg bg-[#161822] border border-[#242837] space-y-2">
               <label className="block text-[#f3f4f6] font-semibold">
-                Maximum Online Party Size
+                Dining Limit (Max Party Size)
               </label>
               <p className="text-[11px] text-[#9ca3af]">
-                Parties exceeding this size must call private dining rather than self-booking online.
+                Online dining is limited to 5 guests maximum. Reservations exceeding 5 will show "Limit exceeded".
               </p>
               <input
                 type="number"
-                min={2}
-                max={30}
+                min={1}
+                max={5}
                 required
-                value={formData.max_party_size}
+                value={Math.min(formData.max_party_size || 5, 5)}
                 onChange={(e) =>
-                  handleChange('max_party_size', parseInt(e.target.value, 10) || 10)
+                  handleChange('max_party_size', Math.min(parseInt(e.target.value, 10) || 5, 5))
                 }
                 className="w-full bg-[#1c202d] border border-[#2a2f42] rounded-md p-2 text-white font-mono"
               />

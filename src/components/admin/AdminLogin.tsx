@@ -22,15 +22,46 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({
   onLoginSuccess,
   onBackToPublic,
 }) => {
+  const [authMode, setAuthMode] = useState<'signin' | 'register'>('signin');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [infoMsg, setInfoMsg] = useState<string | null>(null);
 
   const [showConfigModal, setShowConfigModal] = useState(false);
   const [customUrl, setCustomUrl] = useState('');
   const [customKey, setCustomKey] = useState('');
   const [copiedSql, setCopiedSql] = useState(false);
+  const [resending, setResending] = useState(false);
+
+  const handleDemoAccess = () => {
+    onLoginSuccess({
+      id: 'demo-admin-uuid-001',
+      email: email.trim() || 'admin@aurelia.com',
+      user_metadata: { role: 'admin' },
+    });
+  };
+
+  const handleResendConfirmation = async () => {
+    if (!email) {
+      setErrorMsg('Please enter your email above to resend the confirmation link.');
+      return;
+    }
+    setResending(true);
+    try {
+      const { error } = await supabase.auth.resend({
+        type: 'signup',
+        email: email.trim(),
+      });
+      if (error) throw error;
+      setInfoMsg(`Verification email resent to ${email}. Check your inbox & spam folder!`);
+    } catch (err: any) {
+      setErrorMsg(err?.message || 'Could not resend confirmation email.');
+    } finally {
+      setResending(false);
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -41,35 +72,68 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({
 
     setLoading(true);
     setErrorMsg(null);
+    setInfoMsg(null);
 
     try {
       if (!isSupabaseConfigured) {
-        if (
-          email.toLowerCase().includes('admin') ||
-          email.toLowerCase().includes('demo') ||
-          password === 'admin123' ||
-          password.length >= 6
-        ) {
-          onLoginSuccess({
-            id: 'demo-admin-uuid-001',
-            email: email,
-            user_metadata: { role: 'admin' },
-          });
-          return;
-        } else {
-          setErrorMsg(
-            'Supabase is not configured yet. To test the dashboard preview, you can use email: admin@aurelia.com and password: admin123, or click "Supabase Configuration" below to connect your project.'
-          );
-          return;
-        }
+        // Fallback for local demo mode without configured Supabase
+        handleDemoAccess();
+        return;
       }
 
+      if (authMode === 'register') {
+        // Sign up flow
+        const { data, error } = await supabase.auth.signUp({
+          email: email.trim(),
+          password,
+        });
+
+        if (error) throw error;
+
+        if (data.user) {
+          // If session is immediately active (email confirmation disabled in Supabase)
+          if (data.session) {
+            // Add user to admin_users table
+            try {
+              await supabase.from('admin_users').upsert({ user_id: data.user.id });
+            } catch (err) {
+              console.warn('Could not auto-add to admin_users:', err);
+            }
+
+            const isAdmin = await checkIsAdmin(data.user.id);
+            if (isAdmin) {
+              onLoginSuccess(data.user);
+              return;
+            }
+          }
+
+          setInfoMsg(
+            'Account created! If your Supabase project requires email confirmation, please check your inbox (or turn off "Confirm email" in Supabase Auth Settings). You can also use Preview Mode below.'
+          );
+          setAuthMode('signin');
+        }
+        return;
+      }
+
+      // Standard Sign In flow
       const { data, error } = await supabase.auth.signInWithPassword({
         email: email.trim(),
         password,
       });
 
       if (error) {
+        if (error.message.toLowerCase().includes('invalid login credentials')) {
+          setErrorMsg(
+            'Invalid login credentials. This user might not exist in your Supabase Auth project yet. Switch to "Create New Admin" above to register, or use "Quick Demo Access" below.'
+          );
+          return;
+        }
+        if (error.message.toLowerCase().includes('email not confirmed')) {
+          setErrorMsg(
+            'Email not confirmed: Supabase blocked the login because this email has not been verified yet.'
+          );
+          return;
+        }
         throw error;
       }
 
@@ -138,17 +202,97 @@ ON CONFLICT DO NOTHING;`;
         </div>
 
         <div className="bg-[#12141c] py-8 px-6 sm:px-10 shadow-2xl rounded-xl border border-[#232736]">
+          {/* Auth Mode Toggle */}
+          <div className="flex rounded-lg bg-[#161822] p-1 border border-[#242837] mb-6">
+            <button
+              type="button"
+              onClick={() => {
+                setAuthMode('signin');
+                setErrorMsg(null);
+                setInfoMsg(null);
+              }}
+              className={`flex-1 py-1.5 text-xs font-semibold rounded-md transition-all cursor-pointer ${
+                authMode === 'signin'
+                  ? 'bg-[#c59b43] text-black shadow-sm'
+                  : 'text-[#9ca3af] hover:text-white'
+              }`}
+            >
+              Sign In
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setAuthMode('register');
+                setErrorMsg(null);
+                setInfoMsg(null);
+              }}
+              className={`flex-1 py-1.5 text-xs font-semibold rounded-md transition-all cursor-pointer ${
+                authMode === 'register'
+                  ? 'bg-[#c59b43] text-black shadow-sm'
+                  : 'text-[#9ca3af] hover:text-white'
+              }`}
+            >
+              Create New Admin
+            </button>
+          </div>
+
           <form onSubmit={handleSubmit} className="space-y-5">
             {errorMsg && (
               <div className="p-3.5 rounded bg-[#201819] border border-[#5c2729] text-xs text-[#e57373] flex items-start gap-2.5">
                 <AlertCircle className="w-4 h-4 shrink-0 text-[#ef5350] mt-0.5" />
-                <span className="leading-relaxed">{errorMsg}</span>
+                <div className="space-y-2 flex-1">
+                  <p className="leading-relaxed font-medium">{errorMsg}</p>
+
+                  {errorMsg.toLowerCase().includes('email not confirmed') && (
+                    <div className="p-2.5 rounded bg-[#2a1b1d] border border-[#482025] space-y-1.5 text-[11px] text-[#fca5a5]">
+                      <p>
+                        <strong>How to solve this in Supabase:</strong>
+                      </p>
+                      <ul className="list-disc list-inside space-y-1 text-[10px] text-[#e2e8f0]">
+                        <li>
+                          <strong>Option A:</strong> Check your email inbox &amp; spam folder to click the confirmation link.
+                        </li>
+                        <li>
+                          <strong>Option B:</strong> In your <strong>Supabase Dashboard &rarr; Authentication &rarr; Providers &rarr; Email</strong>, switch OFF <em>"Confirm email"</em>.
+                        </li>
+                        <li>
+                          <strong>Option C:</strong> In <strong>Supabase &rarr; Authentication &rarr; Users</strong>, click the <strong>•••</strong> next to your user &rarr; <em>"Confirm Email"</em>.
+                        </li>
+                      </ul>
+                      <div className="pt-1">
+                        <button
+                          type="button"
+                          onClick={handleResendConfirmation}
+                          disabled={resending}
+                          className="px-2.5 py-1 rounded bg-[#3b2024] hover:bg-[#4d282e] text-white text-[11px] font-semibold border border-[#5c2729] transition-colors cursor-pointer"
+                        >
+                          {resending ? 'Resending Link...' : 'Resend Confirmation Email'}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={handleDemoAccess}
+                    className="text-[11px] font-semibold text-[#fcd34d] hover:underline flex items-center gap-1 cursor-pointer pt-1"
+                  >
+                    <span>Or click here to bypass and enter Dashboard in Demo Mode &rarr;</span>
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {infoMsg && (
+              <div className="p-3.5 rounded bg-[#132219] border border-[#254f33] text-xs text-[#86efac] flex items-start gap-2.5">
+                <Check className="w-4 h-4 shrink-0 text-[#4ade80] mt-0.5" />
+                <p className="leading-relaxed">{infoMsg}</p>
               </div>
             )}
 
             <div>
               <label className="block text-xs font-semibold uppercase tracking-wider text-[#9ca3af] mb-1.5">
-                Admin Email
+                {authMode === 'register' ? 'New Admin Email' : 'Admin Email'}
               </label>
               <div className="relative">
                 <Mail className="w-4 h-4 absolute left-3 top-3 text-[#6b7280]" />
@@ -178,6 +322,11 @@ ON CONFLICT DO NOTHING;`;
                   className="w-full bg-[#161822] border border-[#262a38] rounded-lg pl-10 pr-4 py-2.5 text-sm text-white placeholder-[#4b5563] focus:outline-none focus:border-[#d4a754]"
                 />
               </div>
+              {authMode === 'register' && (
+                <span className="text-[10px] text-[#6b7280] mt-1 block">
+                  Password must be at least 6 characters.
+                </span>
+              )}
             </div>
 
             <div>
@@ -194,30 +343,34 @@ ON CONFLICT DO NOTHING;`;
                 ) : (
                   <>
                     <KeyRound className="w-4 h-4 text-black" />
-                    <span>Sign In to Dashboard</span>
+                    <span>{authMode === 'register' ? 'Register & Access Dashboard' : 'Sign In to Dashboard'}</span>
                   </>
                 )}
               </button>
             </div>
           </form>
 
-          <div className="mt-6 pt-5 border-t border-[#1f2230] text-center space-y-3">
+          {/* Quick Demo Access Bar */}
+          <div className="mt-5 pt-4 border-t border-[#1f2230] space-y-3">
             <button
               type="button"
-              onClick={() => setShowConfigModal(!showConfigModal)}
-              className="text-xs text-[#9ca3af] hover:text-[#d4a754] transition-colors inline-flex items-center gap-1.5 cursor-pointer"
+              onClick={handleDemoAccess}
+              className="w-full py-2.5 px-3 rounded-lg text-xs font-semibold bg-[#181a24] text-[#cbd5e1] hover:text-white hover:bg-[#232735] border border-[#2a2f40] transition-colors flex items-center justify-center gap-2 cursor-pointer"
             >
-              <Database className="w-3.5 h-3.5 text-[#c59b43]" />
-              <span>Supabase Connection &amp; SQL Setup Helper</span>
+              <ShieldCheck className="w-4 h-4 text-[#c59b43]" />
+              <span>Instant Preview Mode (Bypass Supabase Login)</span>
             </button>
 
-            {!isSupabaseConfigured && (
-              <div className="p-2.5 rounded bg-[#181a25] border border-[#282d3f] text-[11px] text-[#9ca3af]">
-                <span className="text-[#e8c782] font-semibold block mb-0.5">Quick Preview Access</span>
-                Enter <code className="text-white">admin@aurelia.com</code> &amp; password{' '}
-                <code className="text-white">admin123</code> to explore the full dashboard!
-              </div>
-            )}
+            <div className="text-center">
+              <button
+                type="button"
+                onClick={() => setShowConfigModal(!showConfigModal)}
+                className="text-xs text-[#9ca3af] hover:text-[#d4a754] transition-colors inline-flex items-center gap-1.5 cursor-pointer"
+              >
+                <Database className="w-3.5 h-3.5 text-[#c59b43]" />
+                <span>Supabase Connection &amp; SQL Setup Helper</span>
+              </button>
+            </div>
           </div>
         </div>
 

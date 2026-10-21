@@ -54,7 +54,7 @@ CREATE TABLE IF NOT EXISTS restaurant_settings (
   slot_interval_minutes INT NOT NULL DEFAULT 30,
   booking_notice_hours INT NOT NULL DEFAULT 2,
   default_reservation_duration_minutes INT NOT NULL DEFAULT 90,
-  max_party_size INT NOT NULL DEFAULT 10,
+  max_party_size INT NOT NULL DEFAULT 5,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -80,6 +80,34 @@ CREATE TABLE IF NOT EXISTS reservations (
   special_requests TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- Double-Booking Prevention Trigger
+-- Ensures two people from different names cannot book the same table on the same date and time
+CREATE OR REPLACE FUNCTION prevent_table_double_booking()
+RETURNS TRIGGER AS $$
+BEGIN
+  IF NEW.status != 'cancelled' THEN
+    IF EXISTS (
+      SELECT 1 FROM reservations
+      WHERE table_id = NEW.table_id
+        AND reservation_date = NEW.reservation_date
+        AND id != COALESCE(NEW.id, '00000000-0000-0000-0000-000000000000'::uuid)
+        AND status != 'cancelled'
+        -- Overlap condition: start_a < end_b AND end_a > start_b
+        AND NEW.start_time < end_time
+        AND NEW.end_time > start_time
+    ) THEN
+      RAISE EXCEPTION 'Double-booking is not possible: This table is already booked for this date and time.';
+    END IF;
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trigger_prevent_table_double_booking ON reservations;
+CREATE TRIGGER trigger_prevent_table_double_booking
+BEFORE INSERT OR UPDATE ON reservations
+FOR EACH ROW EXECUTE FUNCTION prevent_table_double_booking();
 
 -- Row Level Security
 ALTER TABLE restaurant_tables ENABLE ROW LEVEL SECURITY;
@@ -140,7 +168,7 @@ INSERT INTO restaurant_settings (
   30,
   2,
   90,
-  10
+  5
 ) ON CONFLICT DO NOTHING;
 
 INSERT INTO business_hours (weekday, is_open, start_time, end_time) VALUES
