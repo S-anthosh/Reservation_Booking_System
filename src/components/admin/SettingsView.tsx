@@ -183,9 +183,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 className="w-full bg-[#1c202d] border border-[#2a2f42] rounded-md p-2 text-white font-mono cursor-pointer"
               >
                 <option value={15}>15 minutes (High density)</option>
-                <option value={30}>30 minutes (Standard fine dining)</option>
+                <option value={30}>30 minutes</option>
                 <option value={45}>45 minutes</option>
                 <option value={60}>60 minutes (Hourly seatings)</option>
+                <option value={90}>90 minutes (Non-overlapping dining sessions)</option>
               </select>
             </div>
 

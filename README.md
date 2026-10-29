@@ -9,7 +9,6 @@ A reservation system for booking rooms and dining tables, built as a team engine
 | Member 1 | [@S-anthosh](https://github.com/S-anthosh) |
 | Member 2 | [@Shrivethan](https://github.com/Shrivethan) |
 | Member 3 | [@arunAK096](https://github.com/arunAK096)  |
->>>>>>> 07f3cbf154879f5e514147719495aeb43bf83cbc
 
 - **Repository:** [https://github.com/S-anthosh/Reservation_Booking_System](https://github.com/S-anthosh/Reservation_Booking_System)
 - **Commit Reference:** `07f3cbf154879f5e514147719495aeb43bf83cbc`
@@ -32,18 +31,19 @@ A reservation system for booking rooms and dining tables, built as a team engine
 
 | Operation | Description |
 |-----------|-------------|
-| **Create Reservation** | Validates `room_id` / `table_id`, `party_size` (max 5), `start_time`, `end_time`; persists a new reservation in state `DRAFT` / `pending`. |
-| **Check Availability** | Reports whether a room/table has an overlapping active reservation (`CONFIRMED` / `pending`) in a given time window. |
-| **Confirm Reservation** | Moves a `DRAFT` reservation to `CONFIRMED`, re-checking availability at that exact moment to eliminate race conditions. |
-| **Cancel Reservation** | Moves a reservation to `CANCELLED`, immediately freeing the room/table for other bookings. |
+| **Create Reservation** | Validates `room_id` / `table_id`, `party_size` (max 5 seats), `start_time`, `end_time`; automatically accepts and confirms the reservation (`status: CONFIRMED`) without manual admin intervention if room space is available. |
+| **Check Availability** | Reports whether a dining room has an overlapping active reservation (`CONFIRMED`) in a given 90-minute time window. |
+| **Confirm Reservation** | Immediate auto-confirmation upon booking. Moves reservations directly to `CONFIRMED` after verifying no overlapping booking exists for the dining room. |
+| **Cancel Reservation** | Moves a reservation to `CANCELLED`, immediately freeing the dining room for other bookings. |
 
 ### Invariants:
 1. **Double-Booking Prevention:** A reservation's time window must have `start_time < end_time`. Two reservations overlap when:
    $$\text{start}_A < \text{end}_B \quad\text{and}\quad \text{end}_A > \text{start}_B$$
-   If two people with different names attempt to book the same room/table at overlapping times, the system rejects the booking with:  
-   `"Double-booking is not possible: This table is already booked for this date and time."`
-2. **Dining Limit:** Maximum of **5 guests** per reservation. Any party size greater than 5 is rejected with `"Limit exceeded"`.
-3. **Slot Limit:** Maximum of **5 table reservations** allowed for any specific date and time slot. If a slot reaches 5 reservations, the system marks the slot as `"Limit Exceeded"`.
+   If two people with different names attempt to book the same dining room at overlapping times, the system rejects the booking with:  
+   `"Double-booking is not possible: This dining room is already booked for this date and time."`
+2. **Instant Auto-Acceptance:** Reservations are automatically approved and confirmed upon booking when space is available within the room's 5-seat capacity limit, removing admin delays.
+3. **90-Minute Non-Overlapping Seating Times:** Seating times are staggered in 90-minute intervals per dining room (e.g. Room 01: 17:00–18:30, 18:30–20:00, 20:00–21:30; Room 02: 17:15–18:45, etc.), mathematically guaranteeing that reservations for the same room cannot overlap.
+4. **Dining Limit:** Maximum of **5 guests** per reservation and room capacity is strictly capped at 5 seats. If a time slot reaches capacity, it is marked as `"Limit Exceeded"`.
 
 ---
 

@@ -77,11 +77,11 @@ export const ReservationSection: React.FC<ReservationSectionProps> = ({
           setSlots(available);
           if (available.length === 0) {
             setSlotError(
-              'Limit exceeded: No tables available for this date and time. Reservations have reached capacity or the restaurant is closed.'
+              'No tables available for this date. Reservations have reached capacity or the restaurant is closed.'
             );
-          } else if (available.every((s) => s.isLimitExceeded)) {
+          } else if (available.every((s) => s.isLimitExceeded || s.isBooked || (s.availableSeats ?? 0) === 0)) {
             setSlotError(
-              'Limit exceeded: Maximum of 5 table reservations reached for all time slots on this particular date. Please choose another date.'
+              'No slots remaining: All dining tables are fully booked for all time slots on this particular date. Please choose another date.'
             );
           }
         }
@@ -452,7 +452,7 @@ export const ReservationSection: React.FC<ReservationSectionProps> = ({
                   </label>
                   {selectedSlot && (
                     <span className="text-xs text-[#e8c782] font-medium">
-                      Assigned: {selectedSlot.tableName} ({selectedSlot.tableArea})
+                      Assigned: {selectedSlot.tableName} ({selectedSlot.tableArea}) · {selectedSlot.availableSeats ?? selectedSlot.totalCapacity ?? 5} of {selectedSlot.totalCapacity || 5} Seats Available
                     </span>
                   )}
                 </div>
@@ -473,21 +473,44 @@ export const ReservationSection: React.FC<ReservationSectionProps> = ({
                     </div>
                   </div>
                 ) : (
-                  <div className="space-y-3">
-                    <div className="grid grid-cols-3 sm:grid-cols-6 gap-2.5">
+                  <div className="space-y-4">
+                    <div className="flex flex-wrap items-center justify-between text-xs text-[#9ca3af] px-1 gap-2">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span>90-Minute Dining Sessions:</span>
+                        <span className="text-emerald-400 font-medium text-[11px] bg-emerald-950/60 px-2 py-0.5 rounded border border-emerald-900/60">
+                          {slots.filter((s) => !s.isLimitExceeded && (s.availableSeats ?? 0) >= partySize).length} Available
+                        </span>
+                      </div>
+                      <span className="text-[#e8c782] font-medium text-[11px]">
+                        Strict 90m spacing per dining room · Zero overlaps
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-5 gap-3">
                       {slots.map((slot) => {
+                        const availableSeats = slot.availableSeats ?? slot.totalCapacity ?? 5;
+                        const isFullyBooked = availableSeats === 0;
+                        const notEnoughSeats = partySize > availableSeats;
+                        const isUnavailable = isFullyBooked || notEnoughSeats || Boolean(slot.isLimitExceeded);
                         const isSelected =
                           selectedSlot?.label === slot.label &&
                           selectedSlot?.tableId === slot.tableId &&
-                          !slot.isLimitExceeded;
+                          !isUnavailable;
 
                         return (
                           <button
-                            key={`${slot.label}-${slot.tableId || 'limit'}`}
+                            key={`${slot.label}-${slot.tableId || 'slot'}`}
                             onClick={() => {
-                              if (slot.isLimitExceeded) {
+                              if (isFullyBooked) {
                                 setSlotError(
-                                  `Limit exceeded: More than 5 reservations are not allowed for ${slot.label} on this date. Maximum table booking capacity reached.`
+                                  `No slots remaining: ${slot.tableName || 'This table'} is already fully booked (0 seats remaining) for ${slot.label}. Please select another table.`
+                                );
+                                setSelectedSlot(null);
+                              } else if (notEnoughSeats) {
+                                setSlotError(
+                                  `Limit exceeded: ${slot.tableName || 'This table'} only has ${availableSeats} ${
+                                    availableSeats === 1 ? 'seat' : 'seats'
+                                  } available, but your party size is ${partySize}.`
                                 );
                                 setSelectedSlot(null);
                               } else {
@@ -495,39 +518,92 @@ export const ReservationSection: React.FC<ReservationSectionProps> = ({
                                 setSelectedSlot(slot);
                               }
                             }}
-                            className={`p-3 rounded-lg text-center transition-all border cursor-pointer relative ${
-                              slot.isLimitExceeded
-                                ? 'border-rose-900/80 bg-[#1f1315] text-[#fca5a5] hover:border-rose-600'
+                            className={`p-3 rounded-xl text-left transition-all border relative flex flex-col justify-between ${
+                              isUnavailable
+                                ? 'border-rose-900/60 bg-[#191113] text-[#fca5a5] hover:border-rose-700/80 cursor-not-allowed opacity-90'
                                 : isSelected
-                                ? 'border-[#d4a754] bg-[#d4a754] text-black font-bold shadow-lg shadow-[#c59b43]/30 scale-105'
-                                : 'border-[#262a38] bg-[#161822] text-[#e2e8f0] hover:border-[#c59b43]/60 hover:bg-[#1f2330]'
+                                ? 'border-[#d4a754] bg-[#221e14] text-white shadow-lg shadow-[#c59b43]/20 ring-1 ring-[#d4a754] cursor-pointer'
+                                : 'border-[#262a38] bg-[#161822] text-[#e2e8f0] hover:border-[#c59b43]/60 hover:bg-[#1a1d29] cursor-pointer'
                             }`}
                           >
-                            <span className="block text-sm font-semibold">{slot.label}</span>
-                            <span
-                              className={`block text-[10px] mt-0.5 truncate font-medium ${
-                                slot.isLimitExceeded
-                                  ? 'text-rose-400 font-semibold'
-                                  : isSelected
-                                  ? 'text-black/80'
-                                  : 'text-[#9ca3af]'
-                              }`}
-                            >
-                              {slot.isLimitExceeded ? 'Limit Exceeded' : (slot.tableArea || 'Available')}
-                            </span>
+                            <div>
+                              <div className="flex items-center justify-between mb-1 gap-1">
+                                <span className="text-base font-bold text-white font-mono">{slot.label}</span>
+                                {isFullyBooked ? (
+                                  <span className="text-[9px] font-semibold text-rose-300 bg-rose-950/90 px-1.5 py-0.5 rounded border border-rose-800 flex items-center gap-1 shrink-0">
+                                    <AlertCircle className="w-2.5 h-2.5 text-rose-400" />
+                                    <span>No slots remaining</span>
+                                  </span>
+                                ) : notEnoughSeats ? (
+                                  <span className="text-[9px] font-semibold text-amber-300 bg-amber-950/90 px-1.5 py-0.5 rounded border border-amber-800 flex items-center gap-1 shrink-0">
+                                    <AlertCircle className="w-2.5 h-2.5 text-amber-400" />
+                                    <span>{availableSeats} {availableSeats === 1 ? 'seat' : 'seats'} left</span>
+                                  </span>
+                                ) : (
+                                  <span className="text-[9px] font-semibold text-emerald-400 bg-emerald-950/80 px-1.5 py-0.5 rounded border border-emerald-800 flex items-center gap-1 shrink-0">
+                                    <CheckCircle2 className="w-2.5 h-2.5 text-emerald-400" />
+                                    <span>Available</span>
+                                  </span>
+                                )}
+                              </div>
+                              <span className="block text-[11px] text-[#9ca3af] font-mono">
+                                {slot.timeRange || `${slot.label} (90 min)`}
+                              </span>
+                            </div>
+
+                            <div className="mt-2.5 pt-2 border-t border-[#232738]/80 text-[10px]">
+                              <div className="flex items-center justify-between mb-1">
+                                <span className="font-medium text-[#e8c782] truncate">
+                                  {slot.tableName || 'Dining Room'}
+                                </span>
+                                <span className="text-[#9ca3af] truncate block text-[9px] ml-1">
+                                  {slot.tableArea || 'Dining Area'}
+                                </span>
+                              </div>
+
+                              {/* Available Seats in the Particular Table */}
+                              <div className="flex items-center justify-between mt-1 pt-1 border-t border-[#202434]/60">
+                                {isFullyBooked ? (
+                                  <div className="flex items-center gap-1 text-[10px] font-semibold text-rose-400">
+                                    <Users className="w-3 h-3 text-rose-400 shrink-0" />
+                                    <span>0 seats available</span>
+                                  </div>
+                                ) : (
+                                  <div className="flex items-center gap-1 text-[10px] font-semibold text-emerald-400">
+                                    <Users className="w-3 h-3 text-emerald-400 shrink-0" />
+                                    <span>
+                                      {availableSeats} {availableSeats === 1 ? 'seat' : 'seats'} available
+                                    </span>
+                                  </div>
+                                )}
+
+                                {isFullyBooked ? (
+                                  <span className="text-[9px] text-rose-400 font-bold uppercase tracking-wider">
+                                    No slots remaining
+                                  </span>
+                                ) : (
+                                  <span className="text-[9px] text-[#9ca3af] font-medium bg-[#1d212d] px-1.5 py-0.2 rounded border border-[#2d3345]">
+                                    Cap: {slot.totalCapacity || 5}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
                           </button>
                         );
                       })}
                     </div>
 
-                    {slots.some((s) => s.isLimitExceeded) && (
-                      <div className="text-[11px] text-[#9ca3af] flex items-center gap-2 pt-1">
-                        <span className="w-2 h-2 rounded-full bg-rose-500 inline-block" />
+                    <div className="p-3 rounded-lg bg-[#151722] border border-[#242938] text-[11px] text-[#9ca3af] flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <span className="w-2 h-2 rounded-full bg-emerald-400 inline-block" />
                         <span>
-                          Time slots with <strong>"Limit Exceeded"</strong> have reached the maximum threshold of 5 table reservations for that particular date and time.
+                          <strong>Instant Auto-Acceptance:</strong> Valid bookings within the 5-seat room limit are immediately confirmed.
                         </span>
                       </div>
-                    )}
+                      <span className="text-[#d4a754] font-medium hidden sm:inline">
+                        90m Seating Guarantee
+                      </span>
+                    </div>
                   </div>
                 )}
               </div>
@@ -541,16 +617,30 @@ export const ReservationSection: React.FC<ReservationSectionProps> = ({
                 </button>
 
                 <button
-                  disabled={!selectedSlot || selectedSlot.isLimitExceeded}
+                  disabled={
+                    !selectedSlot ||
+                    selectedSlot.isLimitExceeded ||
+                    selectedSlot.isBooked ||
+                    (selectedSlot.availableSeats ?? 0) === 0
+                  }
                   onClick={() => {
-                    if (selectedSlot?.isLimitExceeded) {
-                      setSlotError('Limit exceeded: More than 5 reservations are not allowed for this particular date and time.');
+                    if (
+                      selectedSlot?.isLimitExceeded ||
+                      selectedSlot?.isBooked ||
+                      (selectedSlot?.availableSeats ?? 0) === 0
+                    ) {
+                      setSlotError(
+                        'No slots remaining: This table is already booked for this time window. Please select an available slot.'
+                      );
                       return;
                     }
                     setCurrentStep(3);
                   }}
                   className={`inline-flex items-center gap-2 px-7 py-3 rounded text-sm font-semibold transition-all cursor-pointer ${
-                    selectedSlot && !selectedSlot.isLimitExceeded
+                    selectedSlot &&
+                    !selectedSlot.isLimitExceeded &&
+                    !selectedSlot.isBooked &&
+                    (selectedSlot.availableSeats ?? 0) > 0
                       ? 'text-[#0c0d0e] bg-gradient-to-r from-[#d4a754] to-[#c59b43] hover:from-[#e2bd6e] hover:to-[#d4a754] shadow-md'
                       : 'bg-[#232734] text-[#6b7280] cursor-not-allowed'
                   }`}
@@ -599,16 +689,23 @@ export const ReservationSection: React.FC<ReservationSectionProps> = ({
                 <div className="flex items-center gap-2 text-[#cbd5e1]">
                   <Clock className="w-4 h-4 text-[#d4a754]" />
                   <span>
-                    {selectedSlot?.label} (Duration {settings.default_reservation_duration_minutes}m)
+                    {selectedSlot?.timeRange || `${selectedSlot?.label} (90 min dining session)`}
                   </span>
                 </div>
 
                 <div className="flex items-center gap-2 text-[#cbd5e1]">
                   <Users className="w-4 h-4 text-[#d4a754]" />
                   <span>
-                    Party of {partySize} ({selectedSlot?.tableName})
+                    Party of {partySize} · {selectedSlot?.tableName} ({selectedSlot?.availableSeats ?? selectedSlot?.totalCapacity ?? 5} of {selectedSlot?.totalCapacity || 5} Seats Available)
                   </span>
                 </div>
+              </div>
+
+              <div className="p-3 rounded-lg bg-[#142318] border border-[#234b2c] text-xs text-[#86efac] flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 text-[#4ade80] shrink-0" />
+                <span>
+                  <strong>Instant Confirmation:</strong> This reservation will be automatically accepted and confirmed upon submission.
+                </span>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -731,7 +828,7 @@ export const ReservationSection: React.FC<ReservationSectionProps> = ({
                   ) : (
                     <>
                       <CheckCircle2 className="w-4 h-4 text-black" />
-                      <span>Complete Reservation</span>
+                      <span>Confirm &amp; Auto-Book Reservation</span>
                     </>
                   )}
                 </button>
@@ -770,8 +867,8 @@ export const ReservationSection: React.FC<ReservationSectionProps> = ({
                       AUR-{confirmedReservation.id.slice(0, 8).toUpperCase()}
                     </span>
                   </div>
-                  <span className="px-2.5 py-1 rounded text-[11px] font-semibold bg-[#1a2d1d] text-[#4ade80] border border-[#2d5236]">
-                    Status: {confirmedReservation.status.toUpperCase()}
+                  <span className="px-2.5 py-1 rounded text-[11px] font-semibold bg-[#1a2d1d] text-[#4ade80] border border-[#2d5236] tracking-wide">
+                    STATUS: CONFIRMED · AUTO-ACCEPTED
                   </span>
                 </div>
 
@@ -805,11 +902,18 @@ export const ReservationSection: React.FC<ReservationSectionProps> = ({
                   </div>
                 </div>
 
+                <div className="p-2.5 rounded bg-[#132218] border border-[#234b2c] text-[11px] text-[#86efac] mb-3 flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 text-[#4ade80] shrink-0" />
+                  <span>
+                    <strong>Instant Booking:</strong> Auto-accepted without admin delay. Space verified within the 5-seat room limit with a dedicated 90-minute seating window.
+                  </span>
+                </div>
+
                 {confirmedReservation.restaurant_tables && (
                   <div className="p-2.5 rounded bg-[#10121a] border border-[#212534] text-[11px] text-[#cbd5e1] mb-4">
                     <span className="text-[#d4a754] font-medium">Allocated Seating: </span>
                     {confirmedReservation.restaurant_tables.table_name} (
-                    {confirmedReservation.restaurant_tables.area})
+                    {confirmedReservation.restaurant_tables.area} · Max {confirmedReservation.restaurant_tables.capacity || 5} Seats Capacity)
                   </div>
                 )}
 

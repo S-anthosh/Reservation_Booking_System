@@ -15,34 +15,28 @@ export const DEFAULT_SETTINGS: RestaurantSettings = {
   restaurant_email: 'concierge@aurelia-dining.com',
   restaurant_phone: '+1 (415) 890-4200',
   restaurant_address: '742 Montgomery Street, Jackson Square, San Francisco, CA 94111',
-  slot_interval_minutes: 30,
+  slot_interval_minutes: 90,
   booking_notice_hours: 2,
   default_reservation_duration_minutes: 90,
   max_party_size: 5,
 };
 
 export const DEFAULT_BUSINESS_HOURS: BusinessHour[] = [
-  { id: '1', weekday: 0, is_open: true, start_time: '17:00', end_time: '22:30' }, // Sun
+  { id: '1', weekday: 0, is_open: true, start_time: '17:00', end_time: '23:00' }, // Sun
   { id: '2', weekday: 1, is_open: false, start_time: '17:00', end_time: '22:00' }, // Mon (Closed)
-  { id: '3', weekday: 2, is_open: true, start_time: '17:00', end_time: '22:30' }, // Tue
-  { id: '4', weekday: 3, is_open: true, start_time: '17:00', end_time: '22:30' }, // Wed
+  { id: '3', weekday: 2, is_open: true, start_time: '17:00', end_time: '23:00' }, // Tue
+  { id: '4', weekday: 3, is_open: true, start_time: '17:00', end_time: '23:00' }, // Wed
   { id: '5', weekday: 4, is_open: true, start_time: '17:00', end_time: '23:00' }, // Thu
   { id: '6', weekday: 5, is_open: true, start_time: '16:30', end_time: '23:30' }, // Fri
   { id: '7', weekday: 6, is_open: true, start_time: '16:30', end_time: '23:30' }, // Sat
 ];
 
 export const DEFAULT_TABLES: RestaurantTable[] = [
-  { id: 'tbl-1', table_name: 'Table 01 · Hearthside Booth', capacity: 4, area: 'Hearth Room', is_active: true },
-  { id: 'tbl-2', table_name: 'Table 02 · Hearthside Booth', capacity: 4, area: 'Hearth Room', is_active: true },
-  { id: 'tbl-3', table_name: "Table 03 · Chef's Counter A", capacity: 2, area: "Chef's Counter", is_active: true },
-  { id: 'tbl-4', table_name: "Table 04 · Chef's Counter B", capacity: 2, area: "Chef's Counter", is_active: true },
-  { id: 'tbl-5', table_name: 'Table 05 · Window Promenade', capacity: 2, area: 'Main Dining Room', is_active: true },
-  { id: 'tbl-6', table_name: 'Table 06 · Window Promenade', capacity: 2, area: 'Main Dining Room', is_active: true },
-  { id: 'tbl-7', table_name: 'Table 07 · Grand Round', capacity: 6, area: 'Main Dining Room', is_active: true },
-  { id: 'tbl-8', table_name: 'Table 08 · Grand Round', capacity: 8, area: 'Main Dining Room', is_active: true },
-  { id: 'tbl-9', table_name: 'Table 09 · Garden Veranda', capacity: 4, area: 'Terrace Veranda', is_active: true },
-  { id: 'tbl-10', table_name: 'Table 10 · Garden Veranda', capacity: 4, area: 'Terrace Veranda', is_active: true },
-  { id: 'tbl-11', table_name: 'Table 11 · Sommelier Vault', capacity: 10, area: 'Private Cellar', is_active: true },
+  { id: 'tbl-1', table_name: 'Room 01 · Hearthside Dining Room', capacity: 5, area: 'Hearth Room', is_active: true },
+  { id: 'tbl-2', table_name: 'Room 02 · Garden Veranda Room', capacity: 5, area: 'Terrace Veranda', is_active: true },
+  { id: 'tbl-3', table_name: "Room 03 · Chef's Salon Room", capacity: 5, area: "Chef's Salon", is_active: true },
+  { id: 'tbl-4', table_name: 'Room 04 · Sommelier Cellar Room', capacity: 5, area: 'Private Cellar', is_active: true },
+  { id: 'tbl-5', table_name: 'Room 05 · Window Promenade Room', capacity: 5, area: 'Main Promenade', is_active: true },
 ];
 
 export const DEFAULT_MENU: MenuItem[] = [
@@ -263,12 +257,21 @@ export async function getRestaurantTables(): Promise<RestaurantTable[]> {
         .select('*')
         .order('table_name', { ascending: true });
 
-      if (!error && data && data.length > 0) return data as RestaurantTable[];
+      if (!error && data && data.length > 0) {
+        return (data as RestaurantTable[]).map((t) => ({
+          ...t,
+          capacity: Math.min(t.capacity || 5, 5),
+        }));
+      }
     } catch (e) {
       console.warn('Supabase tables fetch failed:', e);
     }
   }
-  return getLocal<RestaurantTable[]>(STORAGE_KEYS.TABLES, DEFAULT_TABLES);
+  const local = getLocal<RestaurantTable[]>(STORAGE_KEYS.TABLES, DEFAULT_TABLES);
+  return local.map((t) => ({
+    ...t,
+    capacity: Math.min(t.capacity || 5, 5),
+  }));
 }
 
 export async function saveRestaurantTable(
@@ -591,9 +594,9 @@ export async function createReservation(reservation: {
     };
   }
 
-  // 3. Strict Double-Booking Prevention:
-  // If 2 people with different names try to book the same table on the same date and overlapping time:
-  const doubleBookingConflict = dateReservations.find((r) => {
+  // 3. Strict Capacity & Seat Availability:
+  // Calculate booked seats on this table during this seating window
+  const overlappingTableReservations = dateReservations.filter((r) => {
     if (r.table_id !== reservation.table_id) return false;
     const rStart = toMinutes(r.start_time);
     const rEnd = toMinutes(r.end_time);
@@ -601,12 +604,30 @@ export async function createReservation(reservation: {
     return targetStart < rEnd && targetEnd > rStart;
   });
 
-  if (doubleBookingConflict) {
-    const tableName = doubleBookingConflict.restaurant_tables?.table_name || 'This table';
+  const bookedSeatsOnTable = overlappingTableReservations.reduce(
+    (sum, r) => sum + (Number(r.party_size) || 0),
+    0
+  );
+  const remainingTableSeats = Math.max(0, 5 - bookedSeatsOnTable);
+
+  if (bookedSeatsOnTable >= 5 || remainingTableSeats === 0) {
+    const tableName = overlappingTableReservations[0]?.restaurant_tables?.table_name || 'This table';
     return {
       data: null,
       error: new Error(
-        `Double-booking is not possible: ${tableName} has already been reserved on ${reservation.reservation_date} for ${doubleBookingConflict.start_time} - ${doubleBookingConflict.end_time} (booked by ${doubleBookingConflict.full_name}). Two guests with different names cannot book the same table at the same time.`
+        `No slots remaining: ${tableName} has all 5 seats already reserved on ${reservation.reservation_date} for this time window.`
+      ),
+    };
+  }
+
+  if (reservation.party_size > remainingTableSeats) {
+    const tableName = overlappingTableReservations[0]?.restaurant_tables?.table_name || 'This table';
+    return {
+      data: null,
+      error: new Error(
+        `Limit exceeded: ${tableName} only has ${remainingTableSeats} ${
+          remainingTableSeats === 1 ? 'seat' : 'seats'
+        } remaining. Cannot accommodate party of ${reservation.party_size} guests.`
       ),
     };
   }
@@ -620,7 +641,7 @@ export async function createReservation(reservation: {
     reservation_date: reservation.reservation_date,
     start_time: reservation.start_time,
     end_time: reservation.end_time,
-    status: 'pending' as const,
+    status: 'confirmed' as const,
     special_requests: reservation.special_requests || null,
   };
 
@@ -696,8 +717,8 @@ export async function createReservation(reservation: {
   }
 
   const current = getLocal<Reservation[]>(STORAGE_KEYS.RESERVATIONS, []);
-  // Verify double-booking in local storage
-  const localConflict = current.find((r) => {
+  // Verify seat capacity in local storage
+  const localTableReservations = current.filter((r) => {
     if (r.reservation_date !== reservation.reservation_date) return false;
     if (r.status === 'cancelled') return false;
     if (r.table_id !== reservation.table_id) return false;
@@ -706,12 +727,30 @@ export async function createReservation(reservation: {
     return targetStart < rEnd && targetEnd > rStart;
   });
 
-  if (localConflict) {
-    const tableName = localConflict.restaurant_tables?.table_name || 'This table';
+  const localBookedSeats = localTableReservations.reduce(
+    (sum, r) => sum + (Number(r.party_size) || 0),
+    0
+  );
+  const localRemainingSeats = Math.max(0, 5 - localBookedSeats);
+
+  if (localBookedSeats >= 5 || localRemainingSeats === 0) {
+    const tableName = localTableReservations[0]?.restaurant_tables?.table_name || 'This table';
     return {
       data: null,
       error: new Error(
-        `Double-booking is not possible: ${tableName} is already booked on ${reservation.reservation_date} for ${localConflict.start_time} - ${localConflict.end_time}. Two people with different names cannot book the same table at the same date and time.`
+        `No slots remaining: ${tableName} has all 5 seats already reserved on ${reservation.reservation_date} for this seating window.`
+      ),
+    };
+  }
+
+  if (reservation.party_size > localRemainingSeats) {
+    const tableName = localTableReservations[0]?.restaurant_tables?.table_name || 'This table';
+    return {
+      data: null,
+      error: new Error(
+        `Limit exceeded: ${tableName} only has ${localRemainingSeats} ${
+          localRemainingSeats === 1 ? 'seat' : 'seats'
+        } remaining. Cannot accommodate party of ${reservation.party_size} guests.`
       ),
     };
   }
@@ -794,6 +833,7 @@ export async function getAvailableTimeSlots(
 
   const parsedReservations = dateReservations.map((res) => ({
     table_id: res.table_id,
+    party_size: Number(res.party_size) || 0,
     start: parseReservationTime(res.start_time),
     end: parseReservationTime(res.end_time),
   }));
@@ -801,63 +841,76 @@ export async function getAvailableTimeSlots(
   const now = new Date();
   const noticeCutoff = new Date(now.getTime() + settings.booking_notice_hours * 60 * 60 * 1000);
 
-  const durationMs = settings.default_reservation_duration_minutes * 60 * 1000;
-  const intervalMs = settings.slot_interval_minutes * 60 * 1000;
+  const durationMs = 90 * 60 * 1000; // 90 minutes dining duration
+  const sessionIntervalMs = 90 * 60 * 1000; // 90 minutes between each seating in that room (cannot overlap)
 
   const availableSlots: TimeSlot[] = [];
-  let currentSlotStart = new Date(dayStartTime.getTime());
 
-  while (currentSlotStart.getTime() + durationMs <= dayEndTime.getTime()) {
-    const currentSlotEnd = new Date(currentSlotStart.getTime() + durationMs);
+  // Generate 90-minute staggered intervals per individual dining room
+  eligibleTables.forEach((table, index) => {
+    // 15-minute stagger between different dining rooms
+    const staggerMinutes = (index % 4) * 15;
+    let roomSessionStart = new Date(dayStartTime.getTime() + staggerMinutes * 60 * 1000);
 
-    if (currentSlotStart >= noticeCutoff) {
-      // Count concurrent active reservations for this particular date and time window
-      const concurrentReservationsCount = parsedReservations.filter((res) => {
-        return currentSlotStart < res.end && currentSlotEnd > res.start;
-      }).length;
+    while (roomSessionStart.getTime() + durationMs <= dayEndTime.getTime()) {
+      const roomSessionEnd = new Date(roomSessionStart.getTime() + durationMs);
 
-      const hoursStr = String(currentSlotStart.getHours()).padStart(2, '0');
-      const minutesStr = String(currentSlotStart.getMinutes()).padStart(2, '0');
-      const label = `${hoursStr}:${minutesStr}`;
+      if (roomSessionStart >= noticeCutoff) {
+        const totalCapacity = Math.min(table.capacity || 5, 5);
 
-      // If more than or equal to 5 reservations exist for this particular date and time:
-      if (concurrentReservationsCount >= 5) {
+        // Find active reservations for this specific table during this 90-minute window
+        const tableReservations = parsedReservations.filter((res) => {
+          if (res.table_id !== table.id) return false;
+          return roomSessionStart < res.end && roomSessionEnd > res.start;
+        });
+
+        // Compute booked seats on this table
+        const bookedSeats = tableReservations.reduce((sum, res) => sum + res.party_size, 0);
+        const remainingSeats = Math.max(0, totalCapacity - bookedSeats);
+        const isTableFullyBooked = remainingSeats === 0;
+
+        // Count concurrent active reservations in venue during this window
+        const concurrentReservationsCount = parsedReservations.filter((res) => {
+          return roomSessionStart < res.end && roomSessionEnd > res.start;
+        }).length;
+
+        const isVenueFull = concurrentReservationsCount >= 5;
+        const cannotFitParty = partySize > remainingSeats;
+
+        const startH = String(roomSessionStart.getHours()).padStart(2, '0');
+        const startM = String(roomSessionStart.getMinutes()).padStart(2, '0');
+        const endH = String(roomSessionEnd.getHours()).padStart(2, '0');
+        const endM = String(roomSessionEnd.getMinutes()).padStart(2, '0');
+        const label = `${startH}:${startM}`;
+        const timeRange = `${startH}:${startM} - ${endH}:${endM} (90 min)`;
+
         availableSlots.push({
-          start: new Date(currentSlotStart),
-          end: new Date(currentSlotEnd),
+          start: new Date(roomSessionStart),
+          end: new Date(roomSessionEnd),
           label,
-          tableId: '',
-          tableName: 'Limit Exceeded',
-          tableArea: 'Limit Exceeded (5/5 reserved)',
-          isLimitExceeded: true,
+          timeRange,
+          tableId: table.id,
+          tableName: table.table_name,
+          tableArea: isTableFullyBooked
+            ? `${table.area} · Fully Booked`
+            : cannotFitParty
+            ? `${table.area} · ${remainingSeats} ${remainingSeats === 1 ? 'seat' : 'seats'} left`
+            : table.area,
+          isLimitExceeded: isTableFullyBooked || isVenueFull || cannotFitParty,
+          isBooked: isTableFullyBooked,
+          totalCapacity,
+          availableSeats: remainingSeats,
           activeReservationsCount: concurrentReservationsCount,
         });
-      } else {
-        const availableTable = eligibleTables.find((table) => {
-          const hasOverlap = parsedReservations.some((res) => {
-            if (res.table_id !== table.id) return false;
-            return currentSlotStart < res.end && currentSlotEnd > res.start;
-          });
-          return !hasOverlap;
-        });
-
-        if (availableTable) {
-          availableSlots.push({
-            start: new Date(currentSlotStart),
-            end: new Date(currentSlotEnd),
-            label,
-            tableId: availableTable.id,
-            tableName: availableTable.table_name,
-            tableArea: availableTable.area,
-            isLimitExceeded: false,
-            activeReservationsCount: concurrentReservationsCount,
-          });
-        }
       }
-    }
 
-    currentSlotStart = new Date(currentSlotStart.getTime() + intervalMs);
-  }
+      // Next seating for this dining room is strictly 90 minutes later
+      roomSessionStart = new Date(roomSessionStart.getTime() + sessionIntervalMs);
+    }
+  });
+
+  // Sort slots chronologically
+  availableSlots.sort((a, b) => a.start.getTime() - b.start.getTime());
 
   return availableSlots;
 }

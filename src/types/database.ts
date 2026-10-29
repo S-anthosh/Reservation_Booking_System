@@ -75,9 +75,13 @@ export interface TimeSlot {
   start: Date;
   end: Date;
   label: string; // "18:00"
+  timeRange?: string; // "18:00 - 19:30 (90 min)"
   tableId: string;
   tableName?: string;
   tableArea?: string;
   isLimitExceeded?: boolean;
   activeReservationsCount?: number;
+  totalCapacity?: number;
+  availableSeats?: number;
+  isBooked?: boolean;
 }

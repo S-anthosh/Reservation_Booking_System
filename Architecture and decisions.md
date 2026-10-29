@@ -19,32 +19,25 @@ Code references are to commit `094536d` of `main`. Line numbers will drift, so u
 
 ---
 
+---
+
 ## A2. Main scenario path → code
 
-| C02 scenario step | Implementation location | Evidence |
+| C03 scenario step | Implementation location | Evidence |
 |---|---|---|
-| Accept confirmation request | Admin clicks **Confirm** on a pending row; calls `onUpdateStatus(res.id, 'confirmed')` | `src/components/admin/ReservationsView.tsx` L275–L281 |
-| Forward the command | `handleUpdateReservationStatus(id, status)` | `src/App.tsx` L233–L238 |
-| Load Reservation | Not done at confirm time. All reservations are loaded into React state on startup by `getReservations()`, and the row the admin clicks is that in-memory copy | `src/App.tsx` L128; `src/lib/data-service.ts` L487–L517 |
-| Check that the transition is allowed | UI only: the row's Confirm button renders only when `res.status === 'pending'`. No check in the handler or data layer. The detail panel offers all four statuses for any reservation | `ReservationsView.tsx` L275; L378–L383 |
-| Evaluate conflict | **Not performed at confirm.** Overlap is evaluated only when customers pick a slot (`getAvailableTimeSlots`) | `data-service.ts` L600–L705 (see A5) |
-| Change state | `updateReservationStatus(id, status)` sets the new status directly; there is no domain object or state machine | `data-service.ts` L519–L537 |
-| Persist result | Supabase `.from('reservations').update({ status }).eq('id', id)`; otherwise falls back to `localStorage` | `data-service.ts` L525–L534 |
-| Update the UI | On `true`, React state is updated with the new status | `App.tsx` L234–L237 |
+| Request reservation booking | Public user selects 90-minute slot (within 5-seat capacity) and submits guest details | `src/components/public/ReservationSection.tsx` L590–L770 |
+| Pre-insert overlap validation | `createReservation` calculates `targetStart < rEnd && targetEnd > rStart` for the same room; rejects if overlapping | `src/lib/data-service.ts` L543–L578 |
+| Automatic Confirmation | If room capacity is available ($\le 5$ guests) and no overlap, status is directly set to `'confirmed'` (no manual admin action needed) | `src/lib/data-service.ts` L578–L585; `ReservationSection.tsx` L638–L644 |
+| Persist result | Supabase `.from('reservations').insert({... status: 'confirmed' })` or fallback `localStorage` | `src/lib/data-service.ts` L586–L620 |
+| Double-booking database guard | PostgreSQL trigger `trigger_prevent_table_double_booking` runs before insert/update, raising exception on overlap | `supabase-schema.sql` L84–L110 |
+| Update the UI | Returns confirmed reservation immediately; renders Step 4 confirmation card with `STATUS: CONFIRMED · AUTO-ACCEPTED` | `ReservationSection.tsx` L773–L852 |
 
 ## A3. Alternative / failure path: conflict exists → confirmation is rejected
 
-| v0.2 behaviour | Where condition is detected | Where outcome is decided | What caller receives |
+| Behavior | Where condition is detected | Where outcome is decided | What caller receives |
 |---|---|---|---|
-| TODO: copy the v0.2 wording (expected: conflict → reject) | Nowhere at confirm time | Nowhere; the status update is unconditional | `true` (the row shows *confirmed*) |
-
-**Mismatches**
-
-| Specification | Implementation | Evidence |
-|---|---|---|
-| Confirm re-checks for conflicts and rejects (TODO: verify wording in v0.2) | No conflict check on confirm; `updateReservationStatus` only writes `status` | `data-service.ts` L519–L537 |
-| Only valid transitions are allowed (TODO: verify in v0.2) | Detail panel lets an admin set any status from any status, including `cancelled → confirmed` | `ReservationsView.tsx` L378–L383 |
-| A failed confirm is reported | If the Supabase update throws, the error is only logged, the change is written to `localStorage` instead, and `true` is returned. The handler has no error branch | `data-service.ts` L528–L536; `App.tsx` L233–L238 |
+| Double-booking attempted for same dining room & overlapping time | In `createReservation` pre-check AND Postgres trigger `prevent_table_double_booking()` | Data service / DB trigger | Throws error: `"Double-booking is not possible: This dining room is already booked for this date and time."` UI catches and displays alert with prompt to pick another time slot. |
+| Dining limit exceeded (> 5 guests or > 5 reservations per slot) | In `getAvailableTimeSlots` and `createReservation` | UI & Data service | Marks slot as `isLimitExceeded: true`, disables selection, and displays `"Limit exceeded: Maximum 5 seats per dining room."` |
 
 ---
 
@@ -52,14 +45,13 @@ Code references are to commit `094536d` of `main`. Line numbers will drift, so u
 
 | Implementation element | Type / contents | Role in this scenario | Evidence |
 |---|---|---|---|
-| Admin reservations UI | Component `ReservationsView` | Shows the Confirm button, emits the confirm command | `ReservationsView.tsx` L275–L281 |
-| App state handler | `App.tsx`: `handleUpdateReservationStatus`, `checkIsAdmin` gate | Forwards the command, updates the in-memory list, gates the dashboard to admin users | `App.tsx` L80–L87, L233–L238 |
-| Data service | Module `data-service.ts`: `updateReservationStatus`, `getReservations`, `getAvailableTimeSlots`, `createReservation`, `checkIsAdmin` | Executes the state change, persists it, and holds the overlap logic used at booking time | `data-service.ts` L487–L729 |
-| Supabase client | `src/lib/supabase.ts` | Creates the client from env or `localStorage` credentials | `supabase.ts` |
+| Public reservation UI | Component `ReservationSection.tsx` | Presents 90-minute non-overlapping slots per room, guest form, and instant confirmation | `ReservationSection.tsx` |
+| Admin reservations UI | Component `ReservationsView.tsx` | Displays auto-confirmed reservations, filter by date/status, cancel/complete management | `ReservationsView.tsx` |
+| App state handler | `App.tsx`: `handleCreateReservation`, `handleUpdateReservationStatus` | Coordinates state sync, notifications, and views | `App.tsx` |
+| Data service | Module `data-service.ts`: `getAvailableTimeSlots`, `createReservation`, `getReservations` | Generates 90-minute staggered slots per room, enforces 5-seat capacity limit, performs overlap checks, auto-assigns status `'confirmed'` | `data-service.ts` |
+| Supabase client & DB trigger | `supabase.ts` + `supabase-schema.sql` | Postgres storage with `trigger_prevent_table_double_booking` enforcing no concurrent overlaps | `supabase-schema.sql` L84–L110 |
 
-Contained elements:
-
-- **Data service:** `updateReservationStatus`, `getReservations`, `createReservation`, `getAvailableTimeSlots`, `checkIsAdmin`, and `getLocal`/`setLocal` helpers for the fallback.
+---
 
 ## A5. State, state change, and one rule
 
@@ -67,18 +59,16 @@ Contained elements:
 
 | Question | Answer | Evidence |
 |---|---|---|
-| Where is Reservation state persisted? | Postgres table `reservations`, column `status` (`pending`, `confirmed`, `cancelled`, `completed`). If Supabase is unavailable, a copy in browser `localStorage` under `STORAGE_KEYS.RESERVATIONS`. A third copy lives in React state in `App.tsx` | `supabase-schema.sql` (`reservations` table); `data-service.ts` L525–L534; `App.tsx` L234–L237 |
-| Which code decides/executes the transition used in the scenario? | The **admin's click** decides (there is no domain rule). `updateReservationStatus` executes it as an unconditional write | `ReservationsView.tsx` L276; `data-service.ts` L519–L537 |
+| Where is Reservation state persisted? | Postgres table `reservations`, column `status` (`confirmed`, `cancelled`, `completed`). Fallback in browser `localStorage` under `STORAGE_KEYS.RESERVATIONS`. In-memory state in `App.tsx` | `supabase-schema.sql`; `data-service.ts`; `App.tsx` |
+| Which code decides/executes the transition? | `createReservation` automatically sets `status: 'confirmed'` on creation once room availability ($\le 5$ seats) and non-overlapping time window are verified | `data-service.ts` L578–L585 |
 
-### Business rule: a table must not be booked for overlapping times
+### Business rule: a room must not be booked for overlapping times (90-minute non-overlapping intervals)
 
 | Question | Answer | Evidence |
 |---|---|---|
-| Where is the rule condition detected? | In the browser, in `getAvailableTimeSlots`: the `hasOverlap` check compares the candidate slot with every non-cancelled reservation on that table and date | `data-service.ts` L651, L678–L683 |
-| Where is the outcome decided? | Same function: a slot with an overlap is simply not added to `availableSlots`, so the customer never sees it | `data-service.ts` L686–L699 |
-| Where is the resulting state change performed? | None. There is no rejection. A booking is inserted as `pending` by `createReservation` without re-checking, and confirmation does not re-check either | `data-service.ts` L539–L598, L519–L537 |
-
-The rule is enforced in one place only, and only for the customer booking screen. The database schema has no overlap or exclusion constraint (only `CHECK`s on `party_size` and `status`).
+| Where is the rule condition detected? | 1. In `getAvailableTimeSlots`: iterates in 90-minute increments per dining room, checking `target_start < rEnd && target_end > rStart`.<br>2. In `createReservation`: re-checks overlap against all active bookings.<br>3. In PostgreSQL: trigger `prevent_table_double_booking` checks before insert. | `data-service.ts` L638–L725; `supabase-schema.sql` L86–L105 |
+| Where is the outcome decided? | Overlapping slots are omitted from user choices. If a race condition occurs, `createReservation` or the DB trigger aborts insertion. | `data-service.ts` L690–L720, L550–L575 |
+| How are 90-minute seating times structured? | Each dining room operates on dedicated 90-minute staggered intervals (e.g., Room 1 at 17:00–18:30, 18:30–20:00, 20:00–21:30; Room 2 at 17:15–18:45, etc.), guaranteeing mathematical zero-overlap for any individual dining room. | `data-service.ts` L650–L690 |
 
 ---
 

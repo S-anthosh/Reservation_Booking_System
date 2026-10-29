@@ -51,7 +51,7 @@ CREATE TABLE IF NOT EXISTS restaurant_settings (
   restaurant_email TEXT NOT NULL DEFAULT 'concierge@aurelia-dining.com',
   restaurant_phone TEXT NOT NULL DEFAULT '+1 (415) 890-4200',
   restaurant_address TEXT NOT NULL DEFAULT '742 Montgomery Street, Jackson Square, San Francisco, CA 94111',
-  slot_interval_minutes INT NOT NULL DEFAULT 30,
+  slot_interval_minutes INT NOT NULL DEFAULT 90,
   booking_notice_hours INT NOT NULL DEFAULT 2,
   default_reservation_duration_minutes INT NOT NULL DEFAULT 90,
   max_party_size INT NOT NULL DEFAULT 5,
@@ -76,7 +76,7 @@ CREATE TABLE IF NOT EXISTS reservations (
   reservation_date DATE NOT NULL,
   start_time TIME NOT NULL,
   end_time TIME NOT NULL,
-  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'confirmed', 'cancelled', 'completed')),
+  status TEXT NOT NULL DEFAULT 'confirmed' CHECK (status IN ('pending', 'confirmed', 'cancelled', 'completed')),
   special_requests TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -165,7 +165,7 @@ INSERT INTO restaurant_settings (
   'concierge@aurelia-dining.com',
   '+1 (415) 890-4200',
   '742 Montgomery Street, Jackson Square, San Francisco, CA 94111',
-  30,
+  90,
   2,
   90,
   5
@@ -185,17 +185,11 @@ ON CONFLICT (weekday) DO UPDATE SET
   end_time = EXCLUDED.end_time;
 
 INSERT INTO restaurant_tables (table_name, capacity, area, is_active) VALUES
-  ('Table 01 · Hearthside Booth', 4, 'Hearth Room', true),
-  ('Table 02 · Hearthside Booth', 4, 'Hearth Room', true),
-  ('Table 03 · Chef''s Counter A', 2, 'Chef''s Counter', true),
-  ('Table 04 · Chef''s Counter B', 2, 'Chef''s Counter', true),
-  ('Table 05 · Window Promenade', 2, 'Main Dining Room', true),
-  ('Table 06 · Window Promenade', 2, 'Main Dining Room', true),
-  ('Table 07 · Grand Round', 6, 'Main Dining Room', true),
-  ('Table 08 · Grand Round', 8, 'Main Dining Room', true),
-  ('Table 09 · Garden Veranda', 4, 'Terrace Veranda', true),
-  ('Table 10 · Garden Veranda', 4, 'Terrace Veranda', true),
-  ('Table 11 · Sommelier Cellar Vault', 10, 'Private Cellar', true)
+  ('Room 01 · Hearthside', 5, 'Hearth Room', true),
+  ('Room 02 · Garden Veranda', 5, 'Terrace Veranda', true),
+  ('Room 03 · Chef''s Salon', 5, 'Chef''s Salon', true),
+  ('Room 04 · Sommelier Cellar', 5, 'Private Cellar', true),
+  ('Room 05 · Window Promenade', 5, 'Main Dining Room', true)
 ON CONFLICT DO NOTHING;
 
 INSERT INTO menu_items (name, description, price, category, is_featured, is_active) VALUES
