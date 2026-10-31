@@ -497,6 +497,9 @@ export async function deleteBlockedDate(id: string): Promise<boolean> {
 }
 
 export async function getReservations(): Promise<Reservation[]> {
+  const localReservations = getLocal<Reservation[]>(STORAGE_KEYS.RESERVATIONS, []);
+  const tables = getLocal<RestaurantTable[]>(STORAGE_KEYS.TABLES, DEFAULT_TABLES);
+
   if (isSupabaseConfigured) {
     try {
       const { data, error } = await supabase
@@ -514,14 +517,22 @@ export async function getReservations(): Promise<Reservation[]> {
         .order('reservation_date', { ascending: false })
         .order('start_time', { ascending: true });
 
-      if (!error && data) return data as Reservation[];
+      if (!error && data) {
+        const map = new Map<string, Reservation>();
+        (data as Reservation[]).forEach((r) => map.set(r.id, r));
+        localReservations.forEach((r) => {
+          if (!map.has(r.id)) map.set(r.id, r);
+        });
+        return Array.from(map.values()).map((res) => ({
+          ...res,
+          restaurant_tables: res.restaurant_tables || tables.find((t) => t.id === res.table_id),
+        }));
+      }
     } catch (e) {
       console.warn('Supabase reservations fetch failed:', e);
     }
   }
 
-  const localReservations = getLocal<Reservation[]>(STORAGE_KEYS.RESERVATIONS, []);
-  const tables = getLocal<RestaurantTable[]>(STORAGE_KEYS.TABLES, DEFAULT_TABLES);
   return localReservations.map((res) => ({
     ...res,
     restaurant_tables: tables.find((t) => t.id === res.table_id),
@@ -569,13 +580,17 @@ export async function createReservation(reservation: {
 
   // 2. Check if reservations for this particular date and time is >= 5
   const allReservations = await getReservations();
-  const dateReservations = allReservations.filter(
-    (r) => r.reservation_date === reservation.reservation_date && r.status !== 'cancelled'
-  );
+  const cleanTargetDate = reservation.reservation_date.slice(0, 10);
+  const dateReservations = allReservations.filter((r) => {
+    if (!r.reservation_date || r.status === 'cancelled') return false;
+    return r.reservation_date.slice(0, 10) === cleanTargetDate;
+  });
 
   const toMinutes = (timeStr: string) => {
-    const [h, m] = timeStr.split(':').map(Number);
-    return h * 60 + (m || 0);
+    if (!timeStr) return 0;
+    const match = timeStr.match(/(\d{1,2}):(\d{2})/);
+    if (!match) return 0;
+    return parseInt(match[1], 10) * 60 + parseInt(match[2], 10);
   };
 
   const targetStart = toMinutes(reservation.start_time);
@@ -605,7 +620,7 @@ export async function createReservation(reservation: {
   });
 
   const bookedSeatsOnTable = overlappingTableReservations.reduce(
-    (sum, r) => sum + (Number(r.party_size) || 0),
+    (sum, r) => sum + Math.max(1, Number(r.party_size) || 1),
     0
   );
   const remainingTableSeats = Math.max(0, 5 - bookedSeatsOnTable);
@@ -636,18 +651,21 @@ export async function createReservation(reservation: {
     full_name: reservation.full_name,
     email: reservation.email,
     phone: reservation.phone,
-    party_size: reservation.party_size,
+    party_size: Number(reservation.party_size) || 1,
     table_id: reservation.table_id,
-    reservation_date: reservation.reservation_date,
+    reservation_date: cleanTargetDate,
     start_time: reservation.start_time,
     end_time: reservation.end_time,
     status: 'confirmed' as const,
     special_requests: reservation.special_requests || null,
   };
 
+  const current = getLocal<Reservation[]>(STORAGE_KEYS.RESERVATIONS, []);
+  const tables = getLocal<RestaurantTable[]>(STORAGE_KEYS.TABLES, DEFAULT_TABLES);
+  const matchingTable = tables.find((t) => t.id === payload.table_id);
+
   if (isSupabaseConfigured) {
     try {
-      // Direct double-booking check in Supabase before insert
       const { data: existingSupabaseReservations, error: checkErr } = await supabase
         .from('reservations')
         .select(`
@@ -656,28 +674,38 @@ export async function createReservation(reservation: {
           start_time,
           end_time,
           table_id,
+          party_size,
           status,
           restaurant_tables (
             table_name
           )
         `)
-        .eq('reservation_date', reservation.reservation_date)
+        .eq('reservation_date', cleanTargetDate)
         .eq('table_id', reservation.table_id)
         .neq('status', 'cancelled');
 
       if (!checkErr && existingSupabaseReservations && existingSupabaseReservations.length > 0) {
-        const conflict = existingSupabaseReservations.find((r: any) => {
+        const overlappingSup = existingSupabaseReservations.filter((r: any) => {
           const rStart = toMinutes(r.start_time);
           const rEnd = toMinutes(r.end_time);
           return targetStart < rEnd && targetEnd > rStart;
         });
 
-        if (conflict) {
-          const tableName = (conflict as any).restaurant_tables?.table_name || 'This table';
+        const supBookedSeats = overlappingSup.reduce(
+          (sum: number, r: any) => sum + Math.max(1, Number(r.party_size) || 1),
+          0
+        );
+        if (supBookedSeats + payload.party_size > 5) {
+          const supRemaining = Math.max(0, 5 - supBookedSeats);
+          const tableName = (overlappingSup[0] as any)?.restaurant_tables?.table_name || 'This table';
           return {
             data: null,
             error: new Error(
-              `Double-booking is not possible: ${tableName} is already booked on ${reservation.reservation_date} for ${conflict.start_time} - ${conflict.end_time} by another guest. Two different reservations cannot book the same table at the same time.`
+              supRemaining === 0
+                ? `No slots remaining: ${tableName} has all 5 seats already reserved on ${cleanTargetDate} for this time window.`
+                : `Limit exceeded: ${tableName} only has ${supRemaining} ${
+                    supRemaining === 1 ? 'seat' : 'seats'
+                  } remaining.`
             ),
           };
         }
@@ -698,72 +726,23 @@ export async function createReservation(reservation: {
         `)
         .single();
 
-      if (error) {
-        if (error.message.toLowerCase().includes('double-booking')) {
-          return {
-            data: null,
-            error: new Error(error.message),
-          };
-        }
-        throw error;
+      if (!error && data) {
+        const savedRes = data as Reservation;
+        setLocal(STORAGE_KEYS.RESERVATIONS, [savedRes, ...current.filter((r) => r.id !== savedRes.id)]);
+        return { data: savedRes, error: null };
       }
-      return { data: data as Reservation, error: null };
     } catch (e: any) {
-      if (e?.message && e.message.toLowerCase().includes('double-booking')) {
-        return { data: null, error: e };
-      }
       console.warn('Supabase create reservation failed:', e);
     }
   }
 
-  const current = getLocal<Reservation[]>(STORAGE_KEYS.RESERVATIONS, []);
-  // Verify seat capacity in local storage
-  const localTableReservations = current.filter((r) => {
-    if (r.reservation_date !== reservation.reservation_date) return false;
-    if (r.status === 'cancelled') return false;
-    if (r.table_id !== reservation.table_id) return false;
-    const rStart = toMinutes(r.start_time);
-    const rEnd = toMinutes(r.end_time);
-    return targetStart < rEnd && targetEnd > rStart;
-  });
-
-  const localBookedSeats = localTableReservations.reduce(
-    (sum, r) => sum + (Number(r.party_size) || 0),
-    0
-  );
-  const localRemainingSeats = Math.max(0, 5 - localBookedSeats);
-
-  if (localBookedSeats >= 5 || localRemainingSeats === 0) {
-    const tableName = localTableReservations[0]?.restaurant_tables?.table_name || 'This table';
-    return {
-      data: null,
-      error: new Error(
-        `No slots remaining: ${tableName} has all 5 seats already reserved on ${reservation.reservation_date} for this seating window.`
-      ),
-    };
-  }
-
-  if (reservation.party_size > localRemainingSeats) {
-    const tableName = localTableReservations[0]?.restaurant_tables?.table_name || 'This table';
-    return {
-      data: null,
-      error: new Error(
-        `Limit exceeded: ${tableName} only has ${localRemainingSeats} ${
-          localRemainingSeats === 1 ? 'seat' : 'seats'
-        } remaining. Cannot accommodate party of ${reservation.party_size} guests.`
-      ),
-    };
-  }
-
-  const tables = getLocal<RestaurantTable[]>(STORAGE_KEYS.TABLES, DEFAULT_TABLES);
-  const matchingTable = tables.find((t) => t.id === payload.table_id);
   const newRes: Reservation = {
     id: `res-${Date.now()}`,
     ...payload,
     created_at: new Date().toISOString(),
     restaurant_tables: matchingTable,
   };
-  setLocal(STORAGE_KEYS.RESERVATIONS, [newRes, ...current]);
+  setLocal(STORAGE_KEYS.RESERVATIONS, [newRes, ...current.filter((r) => r.id !== newRes.id)]);
   return { data: newRes, error: null };
 }
 
@@ -814,26 +793,32 @@ export async function getAvailableTimeSlots(
     dayEndTime.setDate(dayEndTime.getDate() + 1);
   }
 
-  const eligibleTables = tables
-    .filter((t) => t.is_active && t.capacity >= partySize)
-    .sort((a, b) => a.capacity - b.capacity);
+  const cleanTargetDate = targetDateStr.slice(0, 10);
+  const activeTables = tables
+    .filter((t) => t.is_active)
+    .sort((a, b) => a.table_name.localeCompare(b.table_name));
 
-  if (eligibleTables.length === 0) {
+  if (activeTables.length === 0) {
     return [];
   }
 
-  const dateReservations = allReservations.filter(
-    (res) => res.reservation_date === targetDateStr && res.status !== 'cancelled'
-  );
+  const dateReservations = allReservations.filter((res) => {
+    if (!res.reservation_date || res.status === 'cancelled') return false;
+    return res.reservation_date.slice(0, 10) === cleanTargetDate;
+  });
 
   const parseReservationTime = (timeStr: string) => {
-    const parts = timeStr.split(':').map(Number);
-    return new Date(year, month - 1, day, parts[0], parts[1] || 0, 0);
+    if (!timeStr) return new Date(0);
+    const match = timeStr.match(/(\d{1,2}):(\d{2})/);
+    if (!match) return new Date(0);
+    const h = parseInt(match[1], 10);
+    const m = parseInt(match[2], 10);
+    return new Date(year, month - 1, day, h, m, 0);
   };
 
   const parsedReservations = dateReservations.map((res) => ({
     table_id: res.table_id,
-    party_size: Number(res.party_size) || 0,
+    party_size: Math.max(1, Number(res.party_size) || 1),
     start: parseReservationTime(res.start_time),
     end: parseReservationTime(res.end_time),
   }));
@@ -847,7 +832,7 @@ export async function getAvailableTimeSlots(
   const availableSlots: TimeSlot[] = [];
 
   // Generate 90-minute staggered intervals per individual dining room
-  eligibleTables.forEach((table, index) => {
+  activeTables.forEach((table, index) => {
     // 15-minute stagger between different dining rooms
     const staggerMinutes = (index % 4) * 15;
     let roomSessionStart = new Date(dayStartTime.getTime() + staggerMinutes * 60 * 1000);

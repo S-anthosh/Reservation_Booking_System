@@ -414,6 +414,7 @@ export default function App() {
 
       <ReservationSection
         settings={settings}
+        reservationsVersion={reservations.length}
         onReservationComplete={(newRes) => {
           setReservations((prev) => [newRes, ...prev]);
         }}

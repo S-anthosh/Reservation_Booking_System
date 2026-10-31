@@ -21,15 +21,18 @@ import { getAvailableTimeSlots, createReservation } from '../../lib/data-service
 
 interface ReservationSectionProps {
   settings: RestaurantSettings;
+  reservationsVersion?: number;
   onReservationComplete?: (reservation: Reservation) => void;
 }
 
 export const ReservationSection: React.FC<ReservationSectionProps> = ({
   settings,
+  reservationsVersion = 0,
   onReservationComplete,
 }) => {
   const [currentStep, setCurrentStep] = useState<number>(1);
   const [partySize, setPartySize] = useState<number>(2);
+  const [refreshCount, setRefreshCount] = useState<number>(0);
 
   const getInitialDateStr = () => {
     const d = new Date();
@@ -98,7 +101,14 @@ export const ReservationSection: React.FC<ReservationSectionProps> = ({
     return () => {
       isMounted = false;
     };
-  }, [selectedDate, partySize]);
+  }, [selectedDate, partySize, refreshCount, reservationsVersion]);
+
+  // When navigating back into Step 2, immediately refresh slots
+  useEffect(() => {
+    if (currentStep === 2) {
+      setRefreshCount((c) => c + 1);
+    }
+  }, [currentStep]);
 
   // Dining limit fixed to 5
   const maxParty = 5;
@@ -153,15 +163,13 @@ export const ReservationSection: React.FC<ReservationSectionProps> = ({
 
       setConfirmedReservation(data);
       setCurrentStep(4);
+      setRefreshCount((c) => c + 1);
       if (onReservationComplete) {
         onReservationComplete(data);
       }
     } catch (err: any) {
       setSubmitError(err?.message || 'An error occurred while confirming your reservation.');
-      // Re-fetch slots to update real-time availability if conflict happened
-      getAvailableTimeSlots(selectedDate, partySize).then((updated) => {
-        setSlots(updated);
-      });
+      setRefreshCount((c) => c + 1);
     } finally {
       setIsSubmitting(false);
     }
@@ -207,6 +215,7 @@ export const ReservationSection: React.FC<ReservationSectionProps> = ({
     setPhone('');
     setSpecialRequests('');
     setSubmitError(null);
+    setRefreshCount((c) => c + 1);
   };
 
   return (
