@@ -64,7 +64,7 @@ export const ReservationSection: React.FC<ReservationSectionProps> = ({
   useEffect(() => {
     let isMounted = true;
     async function fetchSlots() {
-      if (!selectedDate || partySize <= 0) return;
+      if (!selectedDate || partySize <= 0) return;                     //size
       if (partySize > 5) {
         setSlotError('Limit exceeded: The dining limit is 5 guests per table reservation.');
         setSlots([]);
@@ -75,7 +75,7 @@ export const ReservationSection: React.FC<ReservationSectionProps> = ({
       setSelectedSlot(null);
 
       try {
-        const available = await getAvailableTimeSlots(selectedDate, partySize);
+        const available = await getAvailableTimeSlots(selectedDate, partySize);     //seat availability
         if (isMounted) {
           setSlots(available);
           if (available.length === 0) {
@@ -127,7 +127,7 @@ export const ReservationSection: React.FC<ReservationSectionProps> = ({
 
   const handleSubmitReservation = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedSlot) {
+    if (!selectedSlot) {                        //Form validation
       setSubmitError('Please select a reservation time slot.');
       return;
     }
@@ -495,8 +495,8 @@ export const ReservationSection: React.FC<ReservationSectionProps> = ({
                       </span>
                     </div>
 
-                    <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-5 gap-3">
-                      {slots.map((slot) => {
+                    <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-5 gap-3">       
+                      {slots.map((slot) => {                                                    //Slot card render
                         const availableSeats = slot.availableSeats ?? slot.totalCapacity ?? 5;
                         const isFullyBooked = availableSeats === 0;
                         const notEnoughSeats = partySize > availableSeats;
